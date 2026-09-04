@@ -1,0 +1,5 @@
+subject_info : "$SUBJECT_LABELS"
+example_subject : "$BASE_DATA_FOLDER/example_files/"
+CP_output : "$BASE_DATA_FOLDER/CP_output/"
+savepath : "$BASE_DATA_FOLDER/Figures/"
+data_path: "$BASE_DATA_FOLDER/data.csv"

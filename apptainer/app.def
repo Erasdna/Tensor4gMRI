@@ -1,0 +1,45 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%files
+    # Copy the dependency files from your local machine into the container build
+    pyproject.toml /opt/app/pyproject.toml
+    uv.lock /opt/app/uv.lock
+
+    # Copy your custom package and analysis code
+    src /opt/app/src
+
+%post
+    # --- 1. Prevent Ubuntu from hanging on timezone/keyboard prompts ---
+    export DEBIAN_FRONTEND=noninteractive
+
+    # --- 2. Install basic requirements first ---
+    apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+        gnupg \
+        git \
+        build-essential \
+        g++ \
+        git \
+        curl \
+        ca-certificates \
+        rsync \
+        hdf5-tools \
+        sqlite3 \
+        && rm -rf /var/lib/apt-get/lists/*
+
+    # Install uv
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
+
+    # Install dependencies into a fixed, standalone virtual environment
+    cd /opt/app
+    uv sync --frozen
+
+%environment
+    # Add the container's internal venv to PATH automatically
+    export VIRTUAL_ENV=/opt/app/.venv
+    export PATH="/opt/app/.venv/bin:$PATH"
+
+%runscript
+    # The default action when you execute `apptainer run`
+    exec python "$@"
