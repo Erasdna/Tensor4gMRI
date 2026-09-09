@@ -609,7 +609,7 @@ wheels = [
 [[package]]
 name = "gmritensor"
 version = "0.1.0"
-source = { git = "https://github.com/Erasdna/gMRI-tensor.git#9b072de552b67670ad963273a34a6b5873414948" }
+source = { git = "https://github.com/Erasdna/gMRI-tensor.git#e332caf97c89dc707a74da511264ebb0a1a3de74" }
 dependencies = [
     { name = "h5py" },
     { name = "nibabel" },
@@ -619,6 +619,7 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "seaborn" },
     { name = "statannotations" },
+    { name = "statsmodels" },
     { name = "tensorly" },
     { name = "tlviz" },
     { name = "torch" },

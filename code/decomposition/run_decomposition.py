@@ -22,7 +22,11 @@ if __name__ == "__main__":
         help="Number of components to compute",
     )
     parser.add_argument("save", type=Path, help="Path to save file folder")
-
+    parser.add_argument(
+        "--anonymize",
+        action="store_true",
+        help="Anonymize subject IDs in output",
+    )
     args = parser.parse_args()
 
     # Load csv data
@@ -50,11 +54,11 @@ if __name__ == "__main__":
     weights, factors, err = decomposition.run_CP_decomposition_repeated(
         torch.from_numpy(data).to(device),
         args.rank,
-        CP_max_iter=CP_max_iter,
-        CP_init_repeats=CP_init_repeats,
+        max_iter=CP_max_iter,
+        init_repeats=CP_init_repeats,
         device=device,
-        CP_verbose_level=CP_verbose_level,
-        CP_tolerance=CP_tolerance,
+        verbose_level=CP_verbose_level,
+        tolerance=CP_tolerance,
         normalize=True,
     )
     print(weights)
@@ -67,13 +71,15 @@ if __name__ == "__main__":
     string_dt = h5py.string_dtype(encoding="utf-8", length=None)
     with h5py.File(save_path, "w") as f:
         factor_group = f.create_group("factors")
-        factor_group.create_dataset("subject_mode", data=factors[0][:, order])
+
         factor_group.create_dataset("time_mode", data=factors[1][:, order])
         factor_group.create_dataset("roi_mode", data=factors[2][:, order])
         factor_group.create_dataset("error", data=err)
         factor_group.create_dataset("scaling", data=std_scaling)
         factor_group.create_dataset("weights", data=weights[order])
 
-        f.create_dataset("subjects", data=subjects.astype(object), dtype=string_dt)
+        if not args.anonymize:
+            f.create_dataset("subjects", data=subjects.astype(object), dtype=string_dt)
+            factor_group.create_dataset("subject_mode", data=factors[0][:, order])
         f.create_dataset("time_points", data=time_points)
         f.create_dataset("rois", data=regions)

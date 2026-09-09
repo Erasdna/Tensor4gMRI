@@ -96,6 +96,7 @@ fig, ax = plot_mode_grid(
     subject_info,
     category,
     page_width=19 * cm,
+    share_colorbar_scaling=False,
 )
 fig.savefig(savepath.joinpath(f"{group}_mode_grid.pdf"), dpi=400)
 fig.savefig(savepath.joinpath(f"{group}_mode_grid.png"), dpi=400)

@@ -18,8 +18,8 @@ subject_info = config["subject_info"]
 example_subject = config["example_subject"]
 data_path = config["data_path"]
 
-groups = ["M"]
-Rs = [3]
+groups = ["F","REF","iNPH"]
+Rs = [4]
 #groups = ["F"]
 #Rs = [3,4]
 
