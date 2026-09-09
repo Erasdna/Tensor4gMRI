@@ -8,6 +8,16 @@ Code for the paper "Low-rank tensor decompositions reveal coupled spatiotemporal
 
 The data used in this paper is not made available due to data privacy concerns. Accordingly, we are not able to provide reproducible examples.
 
-If you want to use this code on your own project, we recommend using `uv` to install the dependencies by running:
+If you want to use this code on your own project, we recommend using `uv` to install the dependencies by running `uv sync`. We recommend running code using `uv run`.
 
-`uv sync`
+We also provide an apptainer `.def` file which can be built using `apptainer build apptainer/app.sif apptainer/app.def`
+
+## What is in this repo
+
+This repo contains scripts and code to transform gMRI data containing contrast enhanced imaging from multiple subjects at multiple time points into tensors and then decompose them. This code is mainly built around the [gMRI-tensor](https://github.com/Erasdna/gMRI-tensor) project which wraps functionality for this purpose.
+
+The `code` directory contains the key elements of this project, including:
+- `code/data_preparation`: Scripts to identify relevant files, read them and transform them into tensors
+- `code/decomposition`: Scripts and code to compute the CP decomposition of the tensor
+- `code/replicability`: Scripts and code to perform a replicability analysis of the CP model
+- `code/snakemake`: Scripts and code to reproduce all the figures in the paper
