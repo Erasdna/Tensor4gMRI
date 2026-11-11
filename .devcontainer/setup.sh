@@ -4,7 +4,7 @@ set -uo pipefail
 
 warn() { echo "WARNING: $*" >&2; }
 
-uv sync --frozen --all-extras || warn "uv sync failed"
+uv sync --frozen --extra dev || warn "uv sync failed"
 uv run pre-commit run --all-files || warn "pre-commit reported problems"
 SANDBOX_TESTS_REQUIRED=1 uv run pytest -q -p no:cacheprovider .devcontainer/tests \
     || warn "devcontainer isolation/workflow tests failed"

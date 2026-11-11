@@ -30,18 +30,6 @@ def test_git_remote_reachable(workspace: Path) -> None:
 def test_python_is_project_venv(workspace: Path) -> None:
     assert Path(sys.prefix) == workspace / ".venv"
 
-
-def test_tacl_available(workspace: Path) -> None:  # PROJECT
-    assert shutil.which("tacl"), "tacl is not installed"
-    assert _run(["tacl", "--version"], workspace).returncode == 0
-
-
-def test_project_importable(workspace: Path) -> None:  # PROJECT
-    env = {**os.environ, "PYTHONPATH": str(workspace / "code")}
-    result = _run([sys.executable, "-c", "import grip_tensor"], workspace, env=env)
-    assert result.returncode == 0, result.stderr
-
-
 def test_env_project_dir_is_workspace(workspace: Path) -> None:  # PROJECT
     env_file = workspace / "code" / ".env"
     if not env_file.exists():

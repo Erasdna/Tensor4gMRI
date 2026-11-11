@@ -3,10 +3,6 @@ FROM mcr.microsoft.com/devcontainers/python:1-${PYTHON_VERSION}-bookworm
 
 COPY --from=ghcr.io/astral-sh/uv:0.10.6 /uv /uvx /usr/local/bin/
 
-# PROJECT: extra system packages
-# RUN apt-get update && apt-get install -y --no-install-recommends <packages> \
-#     && rm -rf /var/lib/apt/lists/*
-
 # PROJECT: tacl (TSD upload client)
 RUN UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
     uv tool install --python /usr/local/bin/python tsd-api-client==3.9.6

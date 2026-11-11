@@ -46,7 +46,8 @@
     "UV_PYTHON_DOWNLOADS": "never"
   },
   "remoteEnv": {
-    "SSH_AUTH_SOCK": ""
+    "SSH_AUTH_SOCK": "",
+    "PATH": "${containerWorkspaceFolder}/.venv/bin:${containerEnv:PATH}"
   },
 
   "initializeCommand": "bash .devcontainer/init-host.sh",
