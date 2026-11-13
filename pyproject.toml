@@ -23,12 +23,14 @@ dependencies = [
     "statannotations>=0.7.2",
     "imageio>=2.37.3",
     "gmritensor",
+    "pyarrow",
 ]
 
 
 [project.optional-dependencies]
 dev = [
     "pdbpp",
+    "pytest",
     "bump-my-version",
     "pre-commit",
 ]
@@ -41,6 +43,15 @@ all=["Tensor4gMRI[dev,docs]"]
 
 [tool.setuptools]
 packages = []
+
+[tool.pytest.ini_options]
+pythonpath = ["code"]
+testpaths = ["tests"]
+
+[tool.mypy]
+mypy_path = "code"
+explicit_package_bases = true
+ignore_missing_imports = true
 
 [tool.ruff]
 # Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.
@@ -119,4 +130,4 @@ version: {new_version}
 """
 
 [tool.uv.sources]
-gmritensor = { git = "https://github.com/Erasdna/gMRI-tensor.git" }
+gmritensor = { git = "https://github.com/Erasdna/gMRI-tensor.git", branch = "feature/roi-overview" }

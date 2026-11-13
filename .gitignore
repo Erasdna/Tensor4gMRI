@@ -211,3 +211,7 @@ __marimo__/
 cspell.json
 .snakemake
 reference_projects
+
+# Pipeline (code/pipeline)
+slurm/
+code/VERSION
