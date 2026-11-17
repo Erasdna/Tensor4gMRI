@@ -303,6 +303,7 @@ def plot_primary_groups(
             if row < len(components) - 1:
                 ax.tick_params(labelbottom=False)
         axes[row, 0].set_ylabel(f"Component {row + 1}", fontsize=GROUPS_ROW_LABEL_SIZE)
+    fig.align_ylabels(axes[:, 0])
     # One label for every row, so the rows' own labels stay one line at any height.
     fig.supylabel("Subject coefficient (a.u.)", x=0.08 / PAGE_W, ha="left")
     for ax, variable in zip(axes[0], variables):

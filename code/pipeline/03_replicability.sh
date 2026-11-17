@@ -17,7 +17,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
 # --- gmri replicability options (gMRI docs/cli.md, "gmri replicability") ----------
-REPEATS=${REPEATS:-10}             # --repeats: random splits into halves
+REPEATS=${REPEATS:-100}             # --repeats: random splits into halves
 SEED=${SEED:-0}                    # --seed: seed of the splits, shared by every rank
 STRATIFY_BY=${STRATIFY_BY:-}       # --stratify-by: subject-info column to balance the halves on;
                                    # empty: the group's (Stratum, i.e. Group and Sex, for all;
@@ -26,9 +26,9 @@ N_PROCS=${N_PROCS:-}               # --n-procs: parallel fits per process; empty
                                    # the fit job (LOCAL_PROCS here)
 # Fit options, as in 02_decompose.sh:
 RANKS=${2:-$RANKS}                 # --ranks, or the optional 2nd argument
-RESTARTS=${RESTARTS:-50}           # --restarts: per half and rank
+RESTARTS=${RESTARTS:-100}           # --restarts: per half and rank
 STATISTIC=${STATISTIC:-median}     # --statistic
-MIN_TIMEPOINTS=${MIN_TIMEPOINTS:-3}  # --min-timepoints
+MIN_TIMEPOINTS=${MIN_TIMEPOINTS:-4}  # --min-timepoints
 MAX_INVALID_FRACTION=${MAX_INVALID_FRACTION:-0.2}  # --max-invalid-fraction
 MAX_ITER=${MAX_ITER:-5000}         # --max-iter
 TOLERANCE=${TOLERANCE:-1e-7}       # --tolerance

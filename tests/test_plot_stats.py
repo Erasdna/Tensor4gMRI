@@ -147,3 +147,18 @@ def test_row_labels_never_overlap(rank: int) -> None:
     for upper, lower in zip(boxes, boxes[1:]):
         assert upper.y0 > lower.y1  # rows run top to bottom
     assert fig.get_supylabel() == "Subject coefficient (a.u.)"
+
+
+def test_row_labels_are_aligned() -> None:
+    """Rows of different scales have tick labels of different widths."""
+    frame = subjects(3)
+    frame["c2"] *= 100
+    frame["c3"] *= 0.01
+    fig = plot_primary_groups(frame, ["Group", "Sex"], ["Age"], "Group", "Sex")
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()  # type: ignore[attr-defined]
+    lefts = {
+        round(ax.yaxis.label.get_window_extent(renderer).x0, 1)
+        for ax in panels(fig, 3)[:, 0]
+    }
+    assert len(lefts) == 1
