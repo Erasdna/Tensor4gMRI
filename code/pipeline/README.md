@@ -22,7 +22,7 @@ apptainer build apptainer/app.sif apptainer/app.def
 | `CONTAINER` | The container image, e.g. `$PROJECT_DIR/apptainer/app.sif`. |
 | `BASE_DATA_FOLDER` | Results go to `$BASE_DATA_FOLDER/tensor` (`RESULTS_DIR`). |
 | `RAW_TRACER_DATA_FOLDER` | One folder per subject with its normalized scans and `-sasparc`/`-refroi` segmentations. |
-| `SUBJECT_LABELS` | The subject labels csv: `new_id`, `old_id`, `Group` (0 REF, 1 iNPH), `Sex` (0 M, 1 F), `exclude`, `Age`, `Height`, `Weight`. |
+| `SUBJECT_LABELS` | The subject labels csv: `new_id`, `old_id`, `Group` (0 REF, 1 iNPH; other codes are left out), `Sex` (0 M, 1 F), `exclude`, `Age`, `Height`, `Weight`. |
 | `SLURM_ACCOUNT` | Needed to submit jobs. |
 | `SUB_REF_MEDIAN` | Default `REFERENCE_SUBJECT` of the spatial maps. |
 
@@ -44,7 +44,7 @@ variable that varies is used where a group variable is needed (`code/tensor4gmri
 
 | Script | What it does | Requires |
 |---|---|---|
-| `00_find_files.sh` | Finds each subject's scans closest to 2, 4, 8 and 24 h after the first, merges its SAS (labels + 10000) and parenchyma segmentations and copies its baseline (pre-injection) T1w into `<subject>/`. Writes `files_to_process.csv`, `subject_info.csv` (labels named, `Stratum` added; subjects marked `exclude` left out) and `manifest.csv`. Runs here, not as a job. | raw data, labels |
+| `00_find_files.sh` | Writes `subject_info.csv`, the study's subjects: those of the labels not marked `exclude` and diagnosed REF or iNPH (Group 0 or 1), labels named, `Stratum` added; the others are listed as left out. For these subjects only, finds the scans closest to 2, 4, 8 and 24 h after the first, merges the SAS (labels + 10000) and parenchyma segmentations and copies the baseline (pre-injection) T1w into `<subject>/`, then writes `files_to_process.csv` and `manifest.csv`. Prints the subjects without scans and the number found per Group and Sex. Runs here, not as a job. | raw data, labels |
 | `01_preprocessing.sh` | `gmri preprocess --input-type T1w`: `preprocess/data/roi_signal.parquet` (median and mean per label and scan). | 00 |
 | `02_decompose.sh "<groups>" ["<ranks>"]` | CP fit of each group and rank with random restarts: the best restart and the restarts' reproducibility, in `decompose/cp/rank_<r>_<group>/`. Starts 04 for each fit once it is collected (`PLOT=no`: not). | 00, 01 |
 | `03_replicability.sh "<groups>" ["<ranks>"]` | Half-half replicability: fits of random halves of each group's subjects, the factor match score per split and rank, and its plot against rank. | 00, 01 |

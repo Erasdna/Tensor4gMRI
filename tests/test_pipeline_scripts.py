@@ -218,14 +218,23 @@ def test_find_files_writes_the_scans_subjects_and_manifest(
     raw_data: tuple[Path, Path],
 ) -> None:
     raw, labels = raw_data
-    labels_frame().assign(exclude=[0, 0, 0, 0, 0, 0, 0, 1]).to_csv(labels, index=False)
+    labels_frame().assign(
+        exclude=[0, 0, 0, 0, 0, 0, 0, 1],  # PAT_007 excluded
+        Group=[0, 0, 0, 0, 1, 2, 1, 1],  # PAT_005 neither REF nor iNPH
+    ).to_csv(labels, index=False)
     shutil.rmtree(raw / "PAT_006")
     write_raw_subject(raw / "PAT_006", "PAT_006", second_day=False)
 
     result = run_stage(project, "00_find_files.sh")
     assert result.returncode == 0, result.stderr + result.stdout
 
-    found = sorted(set(subject_ids()) - {"PAT_006", "PAT_007"})
+    valid = sorted(set(subject_ids()) - {"PAT_005", "PAT_007"})
+    found = sorted(set(valid) - {"PAT_006"})  # PAT_006 has no second-day scan
+    for subject in ("PAT_005", "PAT_006", "PAT_007"):
+        assert not (results(project) / subject).exists(), subject  # never processed
+    assert "excluded: PAT_007" in result.stdout
+    assert "not REF or iNPH: PAT_005" in result.stdout
+    assert "No scans of 1 subject(s): PAT_006" in result.stdout
     files = pd.read_csv(
         results(project) / "files_to_process.csv",
         dtype={"old_id": str},
@@ -257,7 +266,7 @@ def test_find_files_writes_the_scans_subjects_and_manifest(
     assert not any((raw / "PAT_000").glob("*segmentation*"))  # raw data untouched
 
     info = pd.read_csv(results(project) / "subject_info.csv")
-    assert info["subjects"].tolist() == found
+    assert info["subjects"].tolist() == valid
     assert info.loc[0, ["Group", "Sex", "Stratum"]].tolist() == ["REF", "M", "REF_M"]
 
     manifest = pd.read_csv(results(project) / "manifest.csv")
@@ -267,7 +276,7 @@ def test_find_files_writes_the_scans_subjects_and_manifest(
     ]  # fmt: skip
     assert len(manifest) == 4 * len(found)
     assert [line.split()[3].rsplit("/", 1)[-1] for line in logged(project)] == [
-        "find_files.py", "make_subject_info.py", "make_manifest.py",
+        "make_subject_info.py", "find_files.py", "make_manifest.py",
     ]  # fmt: skip
 
 
@@ -1000,8 +1009,8 @@ def test_scripts_run_from_the_repo_bound_in_the_container(
     assert result.returncode == 0, result.stderr
     scripts = [cmd[1] for cmd in ran(project) if cmd[0] == "python"]
     assert scripts == [
-        "/mnt/project/code/preprocessing/find_files.py",
         "/mnt/project/code/preprocessing/make_subject_info.py",
+        "/mnt/project/code/preprocessing/find_files.py",
         "/mnt/project/code/preprocessing/make_manifest.py",
     ]
 

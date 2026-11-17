@@ -1,16 +1,30 @@
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from conftest import labels_frame, subject_ids, subject_info_frame
 from tensor4gmri.subject_info import (
     excluded_for_group,
     group_members,
-    included_labels,
+    left_out_labels,
     read_labels,
     read_subject_info,
     subject_info_from_labels,
+    valid_labels,
 )
+
+
+def mixed_labels() -> pd.DataFrame:
+    """Labels with excluded subjects (PAT_001; PAT_007 without an exclude value) and subjects of
+    other diagnoses (PAT_002 coded 2, PAT_005 without a code)."""
+    return labels_frame().assign(
+        exclude=[0, 1, 0, 0, 0, 0, 0, np.nan],
+        Group=[0, 0, 2, 0, 1, np.nan, 1, 1],
+    )
+
+
+VALID = ["PAT_000", "PAT_003", "PAT_004", "PAT_006"]
 
 
 def test_labels_keep_ids_as_text_and_must_be_unique(tmp_path: Path) -> None:
@@ -23,40 +37,37 @@ def test_labels_keep_ids_as_text_and_must_be_unique(tmp_path: Path) -> None:
         read_labels(path)
 
 
-def test_included_labels_drop_excluded_subjects() -> None:
-    labels = labels_frame().assign(exclude=[0, 1, 0, 0, 0, 0, 0, 1])
-    assert included_labels(labels)["new_id"].tolist() == [
-        "PAT_000", "PAT_002", "PAT_003", "PAT_004", "PAT_005", "PAT_006",
-    ]  # fmt: skip
+def test_valid_labels_are_included_ref_and_inph_subjects() -> None:
+    assert valid_labels(mixed_labels())["new_id"].tolist() == VALID
 
 
-def test_subject_info_names_the_codes_of_the_found_subjects() -> None:
-    info = subject_info_from_labels(labels_frame(), ["PAT_005", "PAT_000"])
+def test_left_out_labels_say_why() -> None:
+    assert left_out_labels(mixed_labels()) == {
+        "excluded": ["PAT_001", "PAT_007"],
+        "not REF or iNPH": ["PAT_002", "PAT_005"],
+    }
+    assert left_out_labels(labels_frame()) == {"excluded": [], "not REF or iNPH": []}
+
+
+def test_subject_info_names_the_codes_of_the_valid_subjects() -> None:
+    info = subject_info_from_labels(mixed_labels())
 
     assert info.columns[0] == "subjects"
-    assert info["subjects"].tolist() == ["PAT_000", "PAT_005"]
-    assert info["Group"].tolist() == ["REF", "iNPH"]
-    assert info["Sex"].tolist() == ["M", "F"]
-    assert info["Stratum"].tolist() == ["REF_M", "iNPH_F"]
-    assert info["Age"].tolist() == [60, 65]
+    assert info["subjects"].tolist() == VALID
+    assert info["Group"].tolist() == ["REF", "REF", "iNPH", "iNPH"]
+    assert info["Sex"].tolist() == ["M", "F", "M", "M"]
+    assert info["Stratum"].tolist() == ["REF_M", "REF_F", "iNPH_M", "iNPH_M"]
+    assert info["Age"].tolist() == [60, 63, 64, 66]
 
 
 def test_full_subject_info_matches_the_fixture() -> None:
-    info = subject_info_from_labels(labels_frame(), subject_ids())
+    info = subject_info_from_labels(labels_frame())
     pd.testing.assert_frame_equal(info, subject_info_frame(), check_like=True)
 
 
-def test_subject_info_rejects_excluded_or_unknown_subjects() -> None:
-    labels = labels_frame().assign(exclude=[0, 1, 0, 0, 0, 0, 0, 0])
-    with pytest.raises(ValueError, match="PAT_001"):
-        subject_info_from_labels(labels, ["PAT_000", "PAT_001"])
-    with pytest.raises(ValueError, match="PAT_999"):
-        subject_info_from_labels(labels, ["PAT_999"])
-
-
-def test_subject_info_rejects_unknown_codes() -> None:
+def test_subject_info_rejects_unknown_sex_codes_of_valid_subjects() -> None:
     with pytest.raises(ValueError, match="Sex"):
-        subject_info_from_labels(labels_frame().assign(Sex=2), subject_ids())
+        subject_info_from_labels(labels_frame().assign(Sex=2))
 
 
 def test_read_subject_info_keeps_text(subject_info_path: Path) -> None:

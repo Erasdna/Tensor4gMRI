@@ -18,28 +18,41 @@ def read_labels(path: Path) -> pd.DataFrame:
     return labels
 
 
-def included_labels(labels: pd.DataFrame) -> pd.DataFrame:
-    """The rows of `labels` not marked `exclude`."""
-    return labels[labels["exclude"] == 0]
+def _included(labels: pd.DataFrame) -> pd.Series:
+    return labels["exclude"] == 0
 
 
-def subject_info_from_labels(
-    labels: pd.DataFrame,
-    subjects: Collection[str],
-) -> pd.DataFrame:
-    """The included rows of `labels` of `subjects`, keyed by `subjects` as gmri expects, with
+def _diagnosed(labels: pd.DataFrame) -> pd.Series:
+    return labels["Group"].isin(list(GROUP_LABELS))
+
+
+def valid_labels(labels: pd.DataFrame) -> pd.DataFrame:
+    """The rows of `labels` of the study's subjects: not marked `exclude` and diagnosed REF or
+    iNPH (a Group code of GROUP_LABELS). A missing value in either column is not valid.
+    """
+    return labels[_included(labels) & _diagnosed(labels)]
+
+
+def left_out_labels(labels: pd.DataFrame) -> dict[str, list[str]]:
+    """The ids of `labels` that valid_labels leaves out, by reason: "excluded" (`exclude` not
+    0) and, of the others, "not REF or iNPH" (another or no Group code)."""
+    included = _included(labels)
+    return {
+        "excluded": labels.loc[~included, "new_id"].tolist(),
+        "not REF or iNPH": labels.loc[
+            included & ~_diagnosed(labels),
+            "new_id",
+        ].tolist(),
+    }
+
+
+def subject_info_from_labels(labels: pd.DataFrame) -> pd.DataFrame:
+    """The valid rows of `labels` (valid_labels), keyed by `subjects` as gmri expects, with
     Group and Sex named (REF/iNPH, M/F) and Stratum their combination, e.g. REF_M.
 
-    Raises `ValueError` for a subject of `subjects` that is excluded or not in `labels`, and for
-    a Group or Sex code without a name.
+    Raises `ValueError` for a Sex code without a name.
     """
-    included = included_labels(labels)
-    missing = sorted(set(subjects) - set(included["new_id"]))
-    if missing:
-        raise ValueError(f"Subjects excluded or missing in the labels: {missing}")
-    info = included[included["new_id"].isin(subjects)].rename(
-        columns={"new_id": "subjects"},
-    )
+    info = valid_labels(labels).rename(columns={"new_id": "subjects"})
     for column, names in (("Group", GROUP_LABELS), ("Sex", SEX_LABELS)):
         named = info[column].map(names)
         if named.isna().any():

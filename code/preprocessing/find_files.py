@@ -1,5 +1,5 @@
-"""Find each subject's scans closest to TIME_POINTS hours after the first one, and merge its
-SAS and parenchyma segmentations.
+"""Find the scans of each subject of subject_info.csv (make_subject_info.py: the study's subjects)
+closest to TIME_POINTS hours after the first one, and merge its SAS and parenchyma segmentations.
 
 Writes, under <results_dir>:
 - `<subject>/<subject>-segmentation.nii.gz` (SAS labels + 10000, else the parenchyma labels),
@@ -8,8 +8,8 @@ Writes, under <results_dir>:
 - `files_to_process.csv`: one row per subject and time point, with the baseline (first) and
   post-injection scan, mask and segmentation, the actual time in hours and the old id
 
-Subjects marked `exclude` in the labels are left out; subjects without a scan for every time
-point, or with two time points on one scan, are skipped with a note.
+Subjects without a scan for every time point, or with two time points on one scan, are skipped
+and listed at the end, with the number of subjects found per Group and Sex.
 """
 
 import argparse
@@ -20,7 +20,7 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from tensor4gmri.config import TIME_POINTS
-from tensor4gmri.subject_info import included_labels, read_labels
+from tensor4gmri.subject_info import read_subject_info
 
 
 def compute_time(filename: Path, n: int) -> float:
@@ -99,14 +99,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("folder", type=Path, help="Raw data: one folder per subject")
     parser.add_argument(
-        "labels",
+        "subject_info",
         type=Path,
-        help="Subject labels csv ($SUBJECT_LABELS)",
+        help="subject_info.csv from make_subject_info.py",
     )
     parser.add_argument("save", type=Path, help="Results directory")
     args = parser.parse_args()
 
-    labels = included_labels(read_labels(args.labels))
+    subject_info = read_subject_info(args.subject_info)
 
     save_df: dict[str, list] = {
         "subject": [],
@@ -118,13 +118,15 @@ if __name__ == "__main__":
         "actual_time": [],
         "old_id": [],
     }
-    for subj, old_id in zip(labels["new_id"], labels["old_id"]):
+    skipped = []
+    for subj, old_id in zip(subject_info["subjects"], subject_info["old_id"]):
         subj_path = args.folder.joinpath(subj)
         print(subj)
         try:
             reference, tracer, sas, parenchyma = find_images(subj_path)
         except FileNotFoundError:
             print("Missing files...skipping")
+            skipped.append(subj)
             continue
 
         # Merge
@@ -167,4 +169,8 @@ if __name__ == "__main__":
 
     files = pd.DataFrame(save_df)
     files.to_csv(args.save.joinpath("files_to_process.csv"), index=False)
-    print(f"{files['subject'].nunique()} of {len(labels)} subjects found")
+    found = subject_info[subject_info["subjects"].isin(files["subject"])]
+    print(f"Scans of {len(found)} of {len(subject_info)} subjects found:")
+    print(pd.crosstab(found["Group"], found["Sex"], margins=True).to_string())
+    if skipped:
+        print(f"No scans of {len(skipped)} subject(s): {', '.join(skipped)}")
