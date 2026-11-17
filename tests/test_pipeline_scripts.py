@@ -31,7 +31,7 @@ echo "$n"
 """
 # Logs its options and the command after the container (CONTAINER=none), then runs python
 # scripts and gmri for real.
-APPTAINER = """#!/bin/bash
+APPTAINER = r"""#!/bin/bash
 printf '%q ' "$@" >> "$APPTAINER_LOG.options"
 echo >> "$APPTAINER_LOG.options"
 ulimit -Sn >> "$APPTAINER_LOG.nofile"
@@ -96,6 +96,7 @@ def run_stage(
         "STUB_PROJECT": str(project),
         "SLURM_ACCOUNT": "acct",
         "PLOT": "no",  # 02 without 04's figures, unless a test asks for them
+        "MIN_VOXELS": "0",  # no size filter: stages read roi_signal_min0voxels.parquet
         **(env or {}),
     }
     return subprocess.run(
@@ -285,7 +286,8 @@ def test_preprocessing_submits_gmri_preprocess_of_t1w(project: Path) -> None:
     (results(project) / "manifest.csv").write_text("subject\n")
     result = run_stage(project, "01_preprocessing.sh")
     assert result.returncode == 0, result.stderr
-    (line,) = logged(project)
+    line, clean = logged(project)
+    assert "--job-name=clean_roi_signal " in clean and " --min-voxels 0 " in clean
     assert "--job-name=preprocess " in line
     assert "--cpus-per-task=8" in line
     assert line.endswith(
@@ -302,16 +304,101 @@ def test_preprocessing_needs_the_manifest(project: Path) -> None:
     assert logged(project) == []
 
 
+def test_preprocessing_cleans_the_signal_after_gmri_preprocess(project: Path) -> None:
+    results(project).mkdir(parents=True)
+    (results(project) / "manifest.csv").write_text("subject\n")
+    result = run_stage(project, "01_preprocessing.sh", env={"MIN_VOXELS": "100"})
+    assert result.returncode == 0, result.stderr
+    preprocess, clean = logged(project)
+    data = f"{results(project)}/preprocess/data"
+    assert "--job-name=preprocess " in preprocess
+    assert (
+        "--job-name=clean_roi_signal " in clean and " --dependency=afterok:1 " in clean
+    )
+    assert clean.endswith(
+        f"python code/preprocessing/clean_roi_signal.py --input {data}/roi_signal.parquet "
+        f"--min-voxels 100 --output {data}/roi_signal_min100voxels.parquet "
+        f"--report {data}/removed_rois_min100voxels.csv "
+        f"--label-report {data}/removed_labels_min100voxels.csv",
+    )
+
+
+@pytest.mark.parametrize("min_voxels", ["50", "0"])
+def test_preprocessing_can_only_clean(project: Path, min_voxels: str) -> None:
+    with_data(project)
+    env = {"MIN_VOXELS": min_voxels, "PREPROCESS": "no"}
+    result = run_stage(project, "01_preprocessing.sh", env=env)
+    assert result.returncode == 0, result.stderr
+    (clean,) = logged(project)
+    assert "--job-name=clean_roi_signal " in clean and " --dependency" not in clean
+    assert f" --min-voxels {min_voxels} " in clean
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"PREPROCESS": "no", "MIN_VOXELS": "100"}, "roi_signal.parquet"),
+        ({"MIN_VOXELS": "ten"}, "MIN_VOXELS"),
+        ({"PREPROCESS": "maybe"}, "PREPROCESS"),
+    ],
+)
+def test_preprocessing_checks_its_settings(
+    project: Path,
+    env: dict[str, str],
+    message: str,
+) -> None:
+    results(project).mkdir(parents=True)
+    (results(project) / "manifest.csv").write_text("subject\n")
+    result = run_stage(project, "01_preprocessing.sh", env=env)
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert logged(project) == []
+
+
+def test_fits_read_the_masked_data(project: Path) -> None:
+    data = with_data(project) / "preprocess/data"
+    shutil.copy(data / "roi_signal.parquet", data / "roi_signal_min100voxels.parquet")
+    result = run_stage(
+        project,
+        "02_decompose.sh",
+        "REF",
+        "3",
+        env={"MIN_VOXELS": "100"},
+    )
+    assert result.returncode == 0, result.stderr
+    (plan,) = gmri_lines(project, "plan")
+    assert f" --input {data}/roi_signal_min100voxels.parquet " in plan
+    (lookup,) = [cmd for cmd in ran(project) if "--group" in cmd]
+    assert (
+        lookup[lookup.index("--input") + 1] == f"{data}/roi_signal_min100voxels.parquet"
+    )
+
+
+def test_fits_need_the_masked_data(project: Path) -> None:
+    with_data(project)
+    result = run_stage(
+        project,
+        "02_decompose.sh",
+        "REF",
+        "3",
+        env={"MIN_VOXELS": "100"},
+    )
+    assert result.returncode == 1
+    assert "roi_signal_min100voxels.parquet" in result.stderr
+    assert "01_preprocessing.sh" in result.stderr
+
+
 def test_find_files_and_preprocessing_run_here(
     project: Path,
     raw_data: tuple[Path, Path],
 ) -> None:
+    env = {"LOCAL_PROCS": "2", "MIN_VOXELS": "10"}
     for stage in ("00_find_files.sh", "01_preprocessing.sh"):
-        result = run_stage(project, stage, env={"LOCAL_PROCS": "2"}, sbatch=False)
+        result = run_stage(project, stage, env=env, sbatch=False)
         assert result.returncode == 0, result.stderr
 
-    assert ["gmri", "preprocess"] == ran(project)[-1][:2]
-    assert ran(project)[-1][-2:] == ["--n-procs", "2"]  # lowered to LOCAL_PROCS
+    preprocess = next(cmd for cmd in ran(project) if cmd[:2] == ["gmri", "preprocess"])
+    assert preprocess[-2:] == ["--n-procs", "2"]  # lowered to LOCAL_PROCS
     path = results(project) / "preprocess/data/roi_signal.parquet"
     metadata = pq.read_schema(path).metadata
     assert metadata[b"input_type"] == b"T1w" and metadata[b"signal"] == b"ratio"
@@ -323,14 +410,42 @@ def test_find_files_and_preprocessing_run_here(
     assert ratio["PAT_000", 2, 17] == pytest.approx(1.1)
     assert ratio["PAT_000", 24, 10024] == pytest.approx(1.5)
 
+    # Label 17 has 8 voxels in every subject: removed; the others (28-36 voxels) kept.
+    data = results(project) / "preprocess/data"
+    cleaned = pd.read_parquet(data / "roi_signal_min10voxels.parquet")
+    assert sorted(cleaned["label"].unique()) == [2, 41, 10024]
+    assert cleaned["median"].notna().all()
+    assert len(pd.read_csv(data / "roi_signal_min10voxels.csv")) == len(cleaned)
+    report = pd.read_csv(data / "removed_rois_min10voxels.csv")
+    assert set(report["label"]) == {17} and set(report["reason"]) == {"small"}
+    labels = pd.read_csv(data / "removed_labels_min10voxels.csv")
+    assert labels.to_dict("records") == [
+        {
+            "label": 17,
+            "n_subjects_without": 8,
+            "subjects_without": " ".join(subject_ids()),
+        },
+    ]
+
+    fit = {"RESTARTS": "2", "MAX_ITER": "300", "TOLERANCE": "1e-4", **env}
+    result = run_stage(project, "02_decompose.sh", "all", "2", env=fit, sbatch=False)
+    assert result.returncode == 0, result.stderr
+    model = load_decomposition(
+        results(project) / "decompose/cp/rank_2_all/cp_rank_2/model.h5",
+    )
+    assert sorted(int(label) for label in model.labels) == [2, 41, 10024]
+
 
 REF = subject_ids()[:4]
 INPH = subject_ids()[4:]
 
 
 def with_data(project: Path) -> Path:
-    """The preprocessed data and subject table, as 00 and 01 write them."""
-    write_roi_signal(results(project) / "preprocess/data/roi_signal.parquet")
+    """The preprocessed data (gmri's and, without NaN rows, the copy the fits read with
+    MIN_VOXELS=0) and subject table, as 00 and 01 write them."""
+    data = results(project) / "preprocess/data"
+    write_roi_signal(data / "roi_signal.parquet")
+    shutil.copy(data / "roi_signal.parquet", data / "roi_signal_min0voxels.parquet")
     subject_info_frame().to_csv(results(project) / "subject_info.csv", index=False)
     return results(project)
 
@@ -691,7 +806,7 @@ def test_replicability_of_each_group(project: Path) -> None:
     out = results(project)
     for group, line in (("all", all_plan), ("REF", ref_plan)):
         assert f" --output-dir {out}/replicability/{group} " in line
-        assert f" --input {out}/preprocess/data/roi_signal.parquet " in line
+        assert f" --input {out}/preprocess/data/roi_signal_min0voxels.parquet " in line
         assert " --engine halfhalf --repeats 10 --seed 0 --n-procs 4 " in line
         assert f" --subject-info {out}/subject_info.csv " in line
         assert " --ranks 2 3 " in line

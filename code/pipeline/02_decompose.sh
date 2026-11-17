@@ -22,7 +22,7 @@ RESTARTS=${RESTARTS:-50}                     # --restarts: random initialisation
 STATISTIC=${STATISTIC:-median}               # --statistic: per-label value to decompose
 MIN_TIMEPOINTS=${MIN_TIMEPOINTS:-3}          # --min-timepoints: drop subjects with fewer
                                              # (CP imputes the missing sessions of the others)
-MAX_INVALID_FRACTION=${MAX_INVALID_FRACTION:-0.2}  # --max-invalid-fraction: worse scans count as missing
+MAX_INVALID_FRACTION=${MAX_INVALID_FRACTION:-0.1}  # --max-invalid-fraction: worse scans count as missing
 MAX_ITER=${MAX_ITER:-5000}                   # --max-iter: iterations per restart
 TOLERANCE=${TOLERANCE:-1e-7}                 # --tolerance: reconstruction-error change
 DISTRIBUTE=${DISTRIBUTE:-auto}               # yes: plan/array/collect; no: one process;

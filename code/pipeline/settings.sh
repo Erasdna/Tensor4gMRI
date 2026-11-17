@@ -8,6 +8,10 @@
 # diagnosis or one sex. Each is its own fit, of the subjects in the group only.
 SUBJECT_GROUPS=(all REF iNPH M F)
 RANKS=${RANKS:-"2 3 4 5 6"}          # default ranks of 02-05 (each also takes them as an argument)
+# A subject's ROI with fewer voxels is removed (every time point), then any NaN value, then every
+# label some subject has no row of left: 01 writes the cleaned table that 02-04 read
+# (roi_signal_min<MIN_VOXELS>voxels.parquet). 0: no ROI is too small.
+MIN_VOXELS=${MIN_VOXELS:-100}
 # Spatial maps of 04_plot_decomp.sh: drawn on the merged segmentation (00_find_files.sh) of
 # REFERENCE_SUBJECT, default $SUB_REF_MEDIAN of .env, over REFERENCE_BACKGROUND, an image on the
 # same grid (empty: that subject's pre-injection T1w, <subject>/<subject>-T1w.nii.gz from

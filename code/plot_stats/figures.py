@@ -20,6 +20,7 @@ import scienceplots  # noqa: F401
 from gMRItensor.plotting.utils import get_color_palette
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
@@ -43,10 +44,29 @@ plt.style.use(["science", "no-latex"])
 FILLED_P = 0.05
 OTHER_COLOR = "0.25"
 TEXT_COLOR = "0.15"
-CATEGORY_COLOR = "0.85"
+CATEGORY_COLOR = "0.88"  # boxes of a categorical variable other than the groups
 MISSING_GROUP_COLOR = "0.6"
 NOT_AVAILABLE_COLOR = "0.85"  # a correlation of a group without a slope
 MARKERS = ("o", "^", "s", "D", "v", "P")
+# Marker areas (pt²) that look equally large: a triangle fills less of its area than a circle.
+MARKER_AREA = {"o": 14.0, "^": 18.0}
+DEFAULT_MARKER_AREA = 16.0
+
+# The figure of the coefficients by primary variable (plot_primary_groups), in inches: rows of
+# GROUPS_PANEL_H, shrunk only as far as needed to fit MAX_H, down to MIN_GROUPS_PANEL_H.
+GROUPS_PANEL_H = 45 / 25.4
+MIN_GROUPS_PANEL_H = 20 / 25.4
+GROUPS_TOP = 0.55  # the legend row and the column titles
+GROUPS_FOOT = 0.45  # x tick labels and an x label
+GROUPS_LEFT = 0.85  # the shared y label, the rows' "Component k" and the y tick labels
+NUMERICAL_WIDTH = 1.35  # a numerical column's width, relative to a categorical one
+GROUP_FILL_ALPHA = 0.45
+BOX_LINE = 1.4  # box outlines, whiskers, caps and medians
+BOX_EDGE_COLOR = "0.25"
+GROUPS_TITLE_SIZE = 10
+GROUPS_LEGEND_SIZE = 9
+GROUPS_ROW_LABEL_SIZE = 9  # "Component k" fits beside a row even at MIN_GROUPS_PANEL_H
+R2_SIZE = 8.5
 STATISTICS = {"r": "Correlation", "d": "Cohen's d"}  # by `standardised_effects` kind
 
 # Layout of the effects and correlation figures, in inches: saved (with the style's padding) a
@@ -109,22 +129,33 @@ def p_text(p: float) -> str:
     return "$p<0.001$" if p < 0.001 else f"$p={p:.2g}$"
 
 
-def _boxes(ax: Axes, values: list[np.ndarray], colors: Sequence[str]) -> None:
+def _boxes(
+    ax: Axes,
+    values: list[np.ndarray],
+    colors: Sequence[str],
+    alpha: float,
+) -> None:
+    """A box per non-empty `values` at its position, filled with its colour at `alpha` and drawn
+    with solid outlines, whiskers, caps and medians of BOX_LINE."""
     drawn = [(i, v, c) for i, (v, c) in enumerate(zip(values, colors)) if len(v)]
     if not drawn:
         return
     positions, data, box_colors = zip(*drawn)
+    line = {"color": BOX_EDGE_COLOR, "linewidth": BOX_LINE}
     boxes = ax.boxplot(
         list(data),
         positions=list(positions),
-        widths=0.4,
+        widths=0.55,
         patch_artist=True,
         showfliers=False,
-        medianprops={"color": "black", "linewidth": 1.2},
+        medianprops=line,
+        whiskerprops=line,
+        capprops=line,
+        boxprops={"edgecolor": BOX_EDGE_COLOR, "linewidth": BOX_LINE},
     )
     for patch, color in zip(boxes["boxes"], box_colors):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.7)
+        # Transparent fill only: the outline stays as solid as the median.
+        patch.set_facecolor(to_rgba(color, alpha))
 
 
 def _dots(
@@ -141,9 +172,8 @@ def _dots(
             y[chosen],
             c=list(colors[chosen]),
             marker=marker,
-            s=14,
-            edgecolors="black",
-            linewidths=0.4,
+            s=MARKER_AREA.get(marker, DEFAULT_MARKER_AREA),
+            linewidths=0,
             zorder=3,
         )
 
@@ -164,15 +194,19 @@ def _category_panel(
         ax,
         [values[(position == i).to_numpy()] for i in range(len(names))],
         [box_colors[n] if box_colors else CATEGORY_COLOR for n in names],
+        GROUP_FILL_ALPHA if box_colors else 1.0,
     )
-    x = position.to_numpy(float) + rng.uniform(-0.07, 0.07, len(present))
+    x = position.to_numpy(float) + rng.uniform(-0.16, 0.16, len(present))
     _dots(ax, x, values, present["_color"].to_numpy(), present["_marker"].to_numpy())
     ax.set_xticks(range(len(names)), names)
     ax.set_xlim(-0.6, len(names) - 0.4)
-    ax.tick_params(axis="x", which="minor", bottom=False, top=False)
+    ax.tick_params(axis="x", which="both", bottom=False, top=False)
 
 
 def _numerical_panel(ax: Axes, frame: pd.DataFrame, column: str, y: str) -> None:
+    """The coefficients against `column`, with one least-squares fit over every subject and its
+    R² as a label (unadjusted: a guide to the relation before adjustment, not a test).
+    """
     present = frame.dropna(subset=[column, y])
     x = pd.to_numeric(present[column]).to_numpy(float)
     values = present[y].to_numpy(float)
@@ -184,16 +218,21 @@ def _numerical_panel(ax: Axes, frame: pd.DataFrame, column: str, y: str) -> None
             xs,
             fit.slope * xs + fit.intercept,
             color="black",
-            linewidth=1,
-            label=rf"$R^2$={fit.rvalue**2:.2f}",
+            linewidth=1.2,
+            zorder=4,
         )
-        ax.legend(
-            loc="upper left",
-            fontsize=6,
-            handlelength=1.2,
-            frameon=True,
-            framealpha=0.9,
-        )
+        ax.text(
+            0.04, 0.95, rf"$R^2 = {fit.rvalue**2:.2f}$", transform=ax.transAxes, ha="left",
+            va="top", fontsize=R2_SIZE,
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 1.5},
+        )  # fmt: skip
+
+
+def groups_panel_height(n_rows: int) -> float:
+    """The height of a row of the groups figure: GROUPS_PANEL_H, or less where `n_rows` of them
+    would make the figure taller than MAX_H, but at least MIN_GROUPS_PANEL_H."""
+    fit = (MAX_H - GROUPS_TOP - GROUPS_FOOT) / n_rows
+    return max(min(GROUPS_PANEL_H, fit), MIN_GROUPS_PANEL_H)
 
 
 def plot_primary_groups(
@@ -205,12 +244,15 @@ def plot_primary_groups(
     units: dict[str, str] | None = None,
     names: dict[str, str] | None = None,
 ) -> Figure:
-    """The coefficients (columns c1, c2, ... of `frame`) by each primary variable: one row per
-    component, one column per variable, titled by its display name (`names`, else its column
-    name). Boxes by `group_variable` in the group colours and by another categorical variable
-    in grey; a numerical variable (labelled with its unit from `units`, else a.u.) against the
-    coefficient with one fit over every subject. Every subject is a dot in its group's colour,
-    shaped by `marker_variable` when `frame` has it."""
+    """The coefficients (columns c1, c2, ... of `frame`) by each primary variable, as they are
+    (no tests): one row per component (labelled "Component k", one shared y label), one column
+    per variable, titled by its display name (`names`, else its column name), y shared per row.
+
+    A categorical variable gets a box per level, in the group colours for `group_variable` and
+    light grey otherwise; a numerical one (labelled with its unit from `units`) a scatter with one
+    least-squares fit over every subject and its R². Every subject is a dot in its group's colour,
+    shaped by `marker_variable` when `frame` has it. The figure is PAGE_W wide; its rows are
+    GROUPS_PANEL_H tall unless that would exceed MAX_H (see `groups_panel_height`)."""
     units, names = units or {}, names or {}
     components = [c for c in frame.columns if c[:1] == "c" and c[1:].isdigit()]
     variables = [*categorical, *numerical]
@@ -230,12 +272,26 @@ def plot_primary_groups(
         frame["_marker"] = MARKERS[0]
 
     rng = np.random.default_rng(0)
+    panel_h = groups_panel_height(len(components))
+    height = GROUPS_TOP + GROUPS_FOOT + len(components) * panel_h
     fig, axes = plt.subplots(
         len(components),
         len(variables),
         squeeze=False,
         sharey="row",
-        figsize=(2.7 * len(variables) + 0.4, 2.1 * len(components) + 0.4),
+        figsize=(PAGE_W, height),
+        gridspec_kw={
+            "width_ratios": [1.0] * len(categorical)
+            + [NUMERICAL_WIDTH] * len(numerical),
+            "wspace": 0.08,
+            "hspace": 0.18,
+        },
+    )
+    fig.subplots_adjust(
+        left=GROUPS_LEFT / PAGE_W,
+        right=1 - 0.05 / PAGE_W,
+        top=1 - GROUPS_TOP / height,
+        bottom=GROUPS_FOOT / height,
     )
     for row, component in enumerate(components):
         for ax, variable in zip(axes[row], variables):
@@ -244,9 +300,13 @@ def plot_primary_groups(
                 _category_panel(ax, frame, variable, component, box_colors, rng)
             else:
                 _numerical_panel(ax, frame, variable, component)
-        axes[row, 0].set_ylabel(f"Component {row + 1}\ncoefficient (a.u.)")
+            if row < len(components) - 1:
+                ax.tick_params(labelbottom=False)
+        axes[row, 0].set_ylabel(f"Component {row + 1}", fontsize=GROUPS_ROW_LABEL_SIZE)
+    # One label for every row, so the rows' own labels stay one line at any height.
+    fig.supylabel("Subject coefficient (a.u.)", x=0.08 / PAGE_W, ha="left")
     for ax, variable in zip(axes[0], variables):
-        ax.set_title(names.get(variable, variable))
+        ax.set_title(names.get(variable, variable), fontsize=GROUPS_TITLE_SIZE, pad=4)
     for ax, variable in zip(axes[-1], variables):
         if variable not in categorical:
             ax.set_xlabel(
@@ -254,7 +314,12 @@ def plot_primary_groups(
             )
 
     handles: list[Patch | Line2D] = [
-        Patch(facecolor=color, alpha=0.7, label=level)
+        Patch(
+            facecolor=to_rgba(color, GROUP_FILL_ALPHA),
+            edgecolor=BOX_EDGE_COLOR,
+            linewidth=BOX_LINE,
+            label=level,
+        )
         for level, color in palette.items()
     ]
     handles += [
@@ -263,8 +328,9 @@ def plot_primary_groups(
             [],
             marker=m,
             linestyle="",
-            color="0.5",
-            markeredgecolor="black",
+            color="0.35",
+            markeredgewidth=0,
+            markersize=8 if m == "^" else 7,
             label=s,
         )
         for s, m in shapes.items()
@@ -274,9 +340,9 @@ def plot_primary_groups(
         loc="upper center",
         ncol=len(handles),
         frameon=False,
+        fontsize=GROUPS_LEGEND_SIZE,
         bbox_to_anchor=(0.5, 1.0),
     )
-    fig.tight_layout(rect=(0, 0, 1, 1 - 0.35 / fig.get_figheight()))
     return fig
 
 

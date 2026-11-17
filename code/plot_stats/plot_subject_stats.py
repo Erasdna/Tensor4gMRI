@@ -1,6 +1,7 @@
 """Figures of one model's `gmri stats` results, next to its tables in `<stats-dir>/statistics/`:
 
-- `<model>__subject_stats_groups`: the coefficients by each primary variable
+- `<model>__subject_stats_groups`: the coefficients by each primary variable, as they are (no
+  tests; one fit over every subject with its R² for a numerical one), fitted to a page
 - `<model>__subject_stats_primary`: standardised effects of the primary variables per
   component, Cohen's d of a categorical one and the partial correlation of a numerical one
 - `<model>__subject_stats_clinical`: standardised effects of the clinical variables (with a
@@ -165,7 +166,7 @@ def main(argv: list[str] | None = None) -> list[Path]:
     primary_terms = variables["primary_categorical"] + variables["primary_numerical"]
 
     out = statistics / f"{stem}__subject_stats"
-    written = save_figure(
+    written = save_page_figure(
         plot_primary_groups(
             frame,
             variables["primary_categorical"],

@@ -45,7 +45,7 @@ variable that varies is used where a group variable is needed (`code/tensor4gmri
 | Script | What it does | Requires |
 |---|---|---|
 | `00_find_files.sh` | Writes `subject_info.csv`, the study's subjects: those of the labels not marked `exclude` and diagnosed REF or iNPH (Group 0 or 1), labels named, `Stratum` added; the others are listed as left out. For these subjects only, finds the scans closest to 2, 4, 8 and 24 h after the first, merges the SAS (labels + 10000) and parenchyma segmentations and copies the baseline (pre-injection) T1w into `<subject>/`, then writes `files_to_process.csv` and `manifest.csv`. Prints the subjects without scans and the number found per Group and Sex. Runs here, not as a job. | raw data, labels |
-| `01_preprocessing.sh` | `gmri preprocess --input-type T1w`: `preprocess/data/roi_signal.parquet` (median and mean per label and scan). | 00 |
+| `01_preprocessing.sh` | `gmri preprocess --input-type T1w`: `preprocess/data/roi_signal.parquet` (median and mean per label and scan). Then a job writes the table that 02–04 read, `roi_signal_min<N>voxels.parquet` (and `.csv`), cleaned in three steps: every subject's ROI with fewer than `MIN_VOXELS` voxels (default 100) is removed, then every row with NaN values, then, for every subject, each label some subject has no row of left. Every removed row is listed with its reason (`small`, `nan`, `incomplete`) in `removed_rois_min<N>voxels.csv`, the labels removed for everyone with the subjects without them in `removed_labels_min<N>voxels.csv`. `PREPROCESS=no` only redoes this cleaning, e.g. after changing `MIN_VOXELS`. | 00 |
 | `02_decompose.sh "<groups>" ["<ranks>"]` | CP fit of each group and rank with random restarts: the best restart and the restarts' reproducibility, in `decompose/cp/rank_<r>_<group>/`. Starts 04 for each fit once it is collected (`PLOT=no`: not). | 00, 01 |
 | `03_replicability.sh "<groups>" ["<ranks>"]` | Half-half replicability: fits of random halves of each group's subjects, the factor match score per split and rank, and its plot against rank. | 00, 01 |
 | `04_plot_decomp.sh "<groups>" ["<ranks>"]` | `gmri plot decomposition`: mode grid, subject mode, time mode, spatial maps on `REFERENCE_SUBJECT`, outliers, and the subject and time coefficients as csv. | 02 |
@@ -59,13 +59,20 @@ Without `<ranks>`, `RANKS` of `settings.sh` (`2 3 4 5 6`) is used.
 - **Per stage.** Each script starts with one variable per option of the command it runs, with a
   comment and its default, then the sbatch options of its jobs. Override any of them for one run
   from the environment, e.g. `RESTARTS=100 bash code/pipeline/02_decompose.sh REF 4`.
-- **Shared.** `settings.sh`: `RANKS`, the spatial maps (`REFERENCE_SUBJECT`,
+- **Shared.** `settings.sh`: `RANKS`, `MIN_VOXELS`, the spatial maps (`REFERENCE_SUBJECT`,
   `REFERENCE_BACKGROUND`, `SLICES`), the SLURM array settings (`TASKS_PER_JOB`, `ARRAY_LIMIT`,
   `MAX_ARRAY_SIZE`) and local runs (`LOCAL_PROCS`, `RUN_LOCALLY`).
 - **Spatial maps.** Drawn on `REFERENCE_SUBJECT`'s merged segmentation (default
   `$SUB_REF_MEDIAN`), over `REFERENCE_BACKGROUND` (default that subject's T1w from 00), at
   `SLICES` (`"I J K"`, voxel indices of the background reoriented to RAS; the mode grid shows `I`;
   empty: centre of mass).
+- **Cleaning (01).** `MIN_VOXELS` (default 100) is the smallest ROI, in voxels of a subject's own
+  segmentation, that is used. 01 removes the rows of smaller ones (every time point), then the
+  rows with NaN values (that scan only), then every label that some subject then has no row of,
+  for every subject: the models only see labels present in every subject (and draw the others
+  blank in the maps). The remaining gaps, a subject's single NaN scans of a label, are imputed by
+  CP and do not count toward 02/03's `MAX_INVALID_FRACTION`, which only counts non-finite values.
+  Each threshold has its own file, so fits of different thresholds are not mixed up.
 - **Checks.** Every value is checked before anything is submitted: unknown groups or ranks,
   missing inputs, and (05) variables that are not columns of `subject_info.csv`.
 
@@ -91,7 +98,9 @@ Without `<ranks>`, `RANKS` of `settings.sh` (`2 3 4 5 6`) is used.
 $RESULTS_DIR/                              ($BASE_DATA_FOLDER/tensor)
   files_to_process.csv  subject_info.csv  manifest.csv  commands.log
   <subject>/                               <subject>-segmentation.nii.gz, -brainmask.nii.gz, -T1w.nii.gz
-  preprocess/data/                         roi_signal.parquet, roi_signal.csv, preprocess.json
+  preprocess/data/                         roi_signal.parquet, roi_signal.csv, preprocess.json,
+                                           roi_signal_min<N>voxels.{parquet,csv},
+                                           removed_{rois,labels}_min<N>voxels.csv
   decompose/cp/rank_<r>_<group>/           cp_rank_<r>/ (model.h5, decompose.json, excluded_subjects.csv),
                                            fits.csv, plan.json, restarts/cp_rank_<r>/ (reproducibility.csv/.png)
   replicability/<group>/                   replicability.csv, plan.json, excluded_subjects.csv, restarts/

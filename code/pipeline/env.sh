@@ -35,6 +35,11 @@ if ! [[ "$LOCAL_PROCS" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid LOCAL_PROCS '$LOCAL_PROCS' (expected a positive integer)" >&2
     exit 1
 fi
+if ! [[ "$MIN_VOXELS" =~ ^[0-9]+$ ]]; then
+    echo "Invalid MIN_VOXELS '$MIN_VOXELS' (expected a non-negative integer; 0: any size)" >&2
+    exit 1
+fi
+MIN_VOXELS=$((10#$MIN_VOXELS))
 if [ "$RUN_LOCALLY" = "no" ] && command -v sbatch > /dev/null && [ -z "${SLURM_ACCOUNT:-}" ]; then
     echo "Set SLURM_ACCOUNT in .env to submit jobs (or RUN_LOCALLY=yes to run here)" >&2
     exit 1
@@ -85,9 +90,10 @@ job_name() {
     echo "$1${3:+_rank$3}_$2"
 }
 
-# The per-label table gmri preprocess writes, which decompose and replicability read.
+# The per-label table that 02-04 read: gmri preprocess's, cleaned by 01_preprocessing.sh (small
+# ROIs, NaN values and labels some subject lacks removed).
 signal_table() {
-    echo "$RESULTS_DIR/preprocess/data/roi_signal.parquet"
+    echo "$RESULTS_DIR/preprocess/data/roi_signal_min${MIN_VOXELS}voxels.parquet"
 }
 
 # Output directory of the 03 fits of <group> <rank>; the model is <dir>/cp_rank_<rank>/.
@@ -249,7 +255,8 @@ require_data() {
     local file
     for file in "$SUBJECT_INFO" "$(signal_table)"; do
         if [ ! -f "$file" ]; then
-            echo "No $file: run code/pipeline/00_find_files.sh and 01_preprocessing.sh first" >&2
+            echo "No $file: run code/pipeline/00_find_files.sh and 01_preprocessing.sh" \
+                "(MIN_VOXELS=$MIN_VOXELS) first" >&2
             exit 1
         fi
     done
