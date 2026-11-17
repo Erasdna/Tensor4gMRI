@@ -1,6 +1,7 @@
 """The code/pipeline stages, run against a stub sbatch and a stub apptainer."""
 
 import os
+import re
 import resource
 import shlex
 import shutil
@@ -284,10 +285,12 @@ def test_find_files_writes_the_scans_subjects_and_manifest(
 def test_preprocessing_submits_gmri_preprocess_of_t1w(project: Path) -> None:
     (results(project)).mkdir(parents=True)
     (results(project) / "manifest.csv").write_text("subject\n")
+    (results(project) / "subject_info.csv").write_text("subjects\n")
     result = run_stage(project, "01_preprocessing.sh")
     assert result.returncode == 0, result.stderr
-    line, clean = logged(project)
+    line, clean, volumes = logged(project)
     assert "--job-name=clean_roi_signal " in clean and " --min-voxels 0 " in clean
+    assert "--job-name=subject_volumes " in volumes
     assert "--job-name=preprocess " in line
     assert "--cpus-per-task=8" in line
     assert line.endswith(
@@ -307,10 +310,20 @@ def test_preprocessing_needs_the_manifest(project: Path) -> None:
 def test_preprocessing_cleans_the_signal_after_gmri_preprocess(project: Path) -> None:
     results(project).mkdir(parents=True)
     (results(project) / "manifest.csv").write_text("subject\n")
+    (results(project) / "subject_info.csv").write_text("subjects\n")
     result = run_stage(project, "01_preprocessing.sh", env={"MIN_VOXELS": "100"})
     assert result.returncode == 0, result.stderr
-    preprocess, clean = logged(project)
+    preprocess, clean, volumes = logged(project)
     data = f"{results(project)}/preprocess/data"
+    assert (
+        "--job-name=subject_volumes " in volumes
+        and " --dependency=afterok:1 " in volumes
+    )
+    assert volumes.endswith(
+        f"python code/preprocessing/subject_volumes.py --input {data}/roi_signal.parquet "
+        f"--subject-info {results(project)}/subject_info.csv --output "
+        f"{results(project)}/volumes.csv",
+    )
     assert "--job-name=preprocess " in preprocess
     assert (
         "--job-name=clean_roi_signal " in clean and " --dependency=afterok:1 " in clean
@@ -329,8 +342,9 @@ def test_preprocessing_can_only_clean(project: Path, min_voxels: str) -> None:
     env = {"MIN_VOXELS": min_voxels, "PREPROCESS": "no"}
     result = run_stage(project, "01_preprocessing.sh", env=env)
     assert result.returncode == 0, result.stderr
-    (clean,) = logged(project)
+    clean, volumes = logged(project)
     assert "--job-name=clean_roi_signal " in clean and " --dependency" not in clean
+    assert "--job-name=subject_volumes " in volumes and " --dependency" not in volumes
     assert f" --min-voxels {min_voxels} " in clean
 
 
@@ -349,6 +363,7 @@ def test_preprocessing_checks_its_settings(
 ) -> None:
     results(project).mkdir(parents=True)
     (results(project) / "manifest.csv").write_text("subject\n")
+    (results(project) / "subject_info.csv").write_text("subjects\n")
     result = run_stage(project, "01_preprocessing.sh", env=env)
     assert result.returncode == 1
     assert message in result.stderr
@@ -410,6 +425,16 @@ def test_find_files_and_preprocessing_run_here(
     assert ratio["PAT_000", 2, 17] == pytest.approx(1.1)
     assert ratio["PAT_000", 24, 10024] == pytest.approx(1.5)
 
+    # Volumes from the 1 mm^3 synthetic segmentations: SAS label 10024 (36 voxels), parenchyma
+    # labels 2, 41 (28 each) and 17 (8), no ventricles, no cortex.
+    volumes = pd.read_csv(results(project) / "volumes.csv").set_index("subjects")
+    assert volumes.loc["PAT_000", "sas_volume_ml"] == pytest.approx(0.036)
+    assert volumes.loc["PAT_000", "parenchyma_volume_ml"] == pytest.approx(0.064)
+    assert volumes.loc["PAT_000", "ventricles_volume_ml"] == 0
+    assert volumes.loc["PAT_000", "cortical_grey_matter_volume_fraction"] == 0
+    info = pd.read_csv(results(project) / "subject_info.csv")
+    assert info["total_volume_ml"].tolist() == pytest.approx([0.1] * len(subject_ids()))
+
     # Label 17 has 8 voxels in every subject: removed; the others (28-36 voxels) kept.
     data = results(project) / "preprocess/data"
     cleaned = pd.read_parquet(data / "roi_signal_min10voxels.parquet")
@@ -446,8 +471,36 @@ def with_data(project: Path) -> Path:
     data = results(project) / "preprocess/data"
     write_roi_signal(data / "roi_signal.parquet")
     shutil.copy(data / "roi_signal.parquet", data / "roi_signal_min0voxels.parquet")
-    subject_info_frame().to_csv(results(project) / "subject_info.csv", index=False)
+    with_volumes(subject_info_frame()).to_csv(
+        results(project) / "subject_info.csv",
+        index=False,
+    )
     return results(project)
+
+
+VOLUME_NAMES = ("ventricles", "sas", "parenchyma", "cortical_grey_matter")
+VOLUME_VARIABLES = [
+    f"{name}_volume_{unit}" for unit in ("fraction", "ml") for name in VOLUME_NAMES
+]
+VOLUME_CATEGORIES = (
+    "Anthropometrics=Height[cm],Weight[kg];"
+    "Volume (as a fraction of total intracranial volume)="
+    "ventricles_volume_fraction[,Ventricles],sas_volume_fraction[,SAS],"
+    "parenchyma_volume_fraction[,Parenchyma],cortical_grey_matter_volume_fraction[,Cortical GM];"
+    "Volume (mL)=ventricles_volume_ml[mL,Ventricles],sas_volume_ml[mL,SAS],"
+    "parenchyma_volume_ml[mL,Parenchyma],cortical_grey_matter_volume_ml[mL,Cortical GM]"
+)
+
+
+def with_volumes(info: pd.DataFrame, seed: int = 0) -> pd.DataFrame:
+    """`info` with the volume columns 01 adds (code/preprocessing/subject_volumes.py)."""
+    rng = np.random.default_rng(seed)
+    ml = {name: rng.uniform(20, 400, len(info)) for name in VOLUME_NAMES}
+    total = sum(ml.values())
+    for name in VOLUME_NAMES:
+        info[f"{name}_volume_ml"] = ml[name]
+        info[f"{name}_volume_fraction"] = ml[name] / total
+    return info.assign(total_volume_ml=total)
 
 
 def gmri_lines(project: Path, command: str) -> list[str]:
@@ -690,7 +743,7 @@ def test_plot_decomposition_options(project: Path, raw_data: tuple[Path, Path]) 
     assert len(lines) == 2
     for line in lines:
         assert " --dependency=afterany:7 " in line
-        assert " --slices 3 3 3 " in line and " --numerical " not in line
+        assert " --slices 3 3 3 " in line and " --numerical " not in line  # stored RAS
         assert f" --background {other} " in line
         assert " --page-width onehalf " in line and " --min-panel-width 2 " in line
         assert " --formats png " in line
@@ -807,16 +860,16 @@ def test_replicability_of_each_group(project: Path) -> None:
     for group, line in (("all", all_plan), ("REF", ref_plan)):
         assert f" --output-dir {out}/replicability/{group} " in line
         assert f" --input {out}/preprocess/data/roi_signal_min0voxels.parquet " in line
-        assert " --engine halfhalf --repeats 10 --seed 0 --n-procs 4 " in line
+        assert " --engine halfhalf --repeats 100 --seed 0 --n-procs 4 " in line
         assert f" --subject-info {out}/subject_info.csv " in line
         assert " --ranks 2 3 " in line
         assert (
-            " --method cp --statistic median --min-timepoints 3 --max-invalid-fraction 0.2 "
+            " --method cp --statistic median --min-timepoints 4 --max-invalid-fraction 0.2 "
             in line
         )
-        assert " --restarts 50 --max-iter 5000 --tolerance 1e-7 " in line
+        assert " --restarts 100 --max-iter 5000 --tolerance 1e-7 " in line
         assert " --splits " not in line and " --restart-procs " not in line
-        assert " --overwrite " not in line
+        assert " --overwrite " in line  # OVERWRITE=yes by default
         parses_with_gmri(line)
     assert (
         " --stratify-by Stratum " in all_plan and " --exclude-subjects " not in all_plan
@@ -944,6 +997,44 @@ def stats_plot_lines(project: Path) -> list[str]:
     return [f"{line} " for line in logged(project) if "plot_subject_stats.py" in line]
 
 
+def component_lines(project: Path) -> list[str]:
+    return [
+        f"{line} " for line in logged(project) if "component_correlations.py" in line
+    ]
+
+
+@pytest.mark.parametrize(
+    ("env", "ranks"),
+    [({"COMPONENT_CORRELATIONS": "no"}, "3"), ({}, "1"), ({"PLOTS_ONLY": "yes"}, "3")],
+)
+def test_subject_stats_without_component_correlations(
+    project: Path,
+    env: dict[str, str],
+    ranks: str,
+) -> None:
+    with_data(project)
+    result = run_stage(project, "05_subject_stats.sh", "all", ranks, env=env)
+    assert result.returncode == 0, result.stderr
+    assert component_lines(project) == []
+    (plot,) = stats_plot_lines(project)
+    if env.get("PLOTS_ONLY") != "yes":
+        assert " --dependency=afterany:1 " in plot  # the stats job only
+
+
+def test_component_correlations_setting_is_checked(project: Path) -> None:
+    with_data(project)
+    result = run_stage(
+        project,
+        "05_subject_stats.sh",
+        "all",
+        "3",
+        env={"COMPONENT_CORRELATIONS": "maybe"},
+    )
+    assert result.returncode == 1
+    assert "COMPONENT_CORRELATIONS" in result.stderr
+    assert logged(project) == []
+
+
 def test_subject_stats_of_each_group(project: Path) -> None:
     with_data(project)
     result = run_stage(project, "05_subject_stats.sh", "all REF", "3")
@@ -964,7 +1055,10 @@ def test_subject_stats_of_each_group(project: Path) -> None:
             in stats
         )
         assert f" --output-dir {stats_dir} " in stats
-        assert " --primary-numerical Age --clinical-numerical Height Weight " in stats
+        assert (
+            " --primary-numerical Age --clinical-numerical Height Weight "
+            f"{' '.join(VOLUME_VARIABLES)} " in stats
+        )
         assert " --n-permutations 10000 --seed 0 --alpha 0.05 " in stats
         assert (
             " --clinical-categorical " not in stats and " --interaction " not in stats
@@ -974,13 +1068,27 @@ def test_subject_stats_of_each_group(project: Path) -> None:
         assert f" --model {model} " in plot and f" --stats-dir {stats_dir} " in plot
         assert " --marker-variable Sex " in plot
         assert " --variable 'Age[years,Age]' " in plot  # quoted in the log
-        assert " --categories 'Anthropometrics=Height[cm],Weight[kg]' " in plot
+        logged_categories = plot.split(" --categories '")[1].split("'")[0]
+        # a category may go on after a "," on the next line (05's default)
+        assert re.sub(r",\s+", ",", logged_categories) == VOLUME_CATEGORIES
     assert " --primary-categorical Group Sex " in all_stats
     assert " --primary-categorical Sex " in ref_stats
     assert (
         " --group-variable Group " in all_plot and " --group-variable Sex " in ref_plot
     )
-    assert " --dependency=afterany:1 " in all_plot  # its stats job
+    assert " --dependency=afterany:1:2 " in all_plot  # its stats and component jobs
+    all_components, ref_components = component_lines(project)
+    for group, line, primary in (
+        ("all", all_components, "Group Sex"),
+        ("REF", ref_components, "Sex"),
+    ):
+        assert f"--job-name=component_stats_rank3_{group} " in line
+        assert line.rstrip().endswith(
+            f"python code/plot_stats/component_correlations.py --model {out}/decompose/cp/"
+            f"rank_3_{group}/cp_rank_3 --subject-info {out}/subject_info.csv --output-dir "
+            f"{out}/plots/decomposition/cp/rank_3_{group} --primary-categorical {primary} "
+            "--primary-numerical Age --n-permutations 10000 --seed 0 --alpha 0.05",
+        )
 
 
 def test_subject_stats_variables_override(project: Path) -> None:
@@ -1064,11 +1172,14 @@ def test_subject_stats_runs_here(project: Path) -> None:
     primary = pd.read_csv(statistics / "cp_rank_2__subject_stats_primary.csv")
     assert set(primary["term"]) == {"Group", "Sex", "Age"}
     clinical = pd.read_csv(statistics / "cp_rank_2__subject_stats_clinical.csv")
-    assert set(clinical["term"]) == {"Height", "Weight"}
+    assert set(clinical["term"]) == {"Height", "Weight", *VOLUME_VARIABLES}
     for name in ("groups", "primary", "clinical"):
         assert (statistics / f"cp_rank_2__subject_stats_{name}.png").is_file(), name
     table = (statistics / "cp_rank_2__subject_stats_clinical_table.tex").read_text()
     assert "Anthropometrics" in table and "REF" in table and "iNPH" in table
+    components = pd.read_csv(statistics / "cp_rank_2__subject_stats_components.csv")
+    assert components[["component_a", "component_b"]].values.tolist() == [[1, 2]]
+    assert (statistics / "cp_rank_2__subject_stats_components.png").is_file()
 
 
 def test_containers_may_open_as_many_files_as_allowed(project: Path) -> None:
@@ -1151,3 +1262,82 @@ def test_find_files_rounds_labels_stored_as_floats(
         41,
         10024,
     ]
+
+
+def plotting_subject(project: Path) -> tuple[Path, Path]:
+    """A cropped copy of PAT_000's segmentation and T1w, as code/adapt_example_subject.py makes,
+    stored LIA like FreeSurfer's conformed volumes."""
+    folder = results(project) / "plot_subject"
+    folder.mkdir()
+    files = []
+    for name in ("PAT_000-segmentation.nii.gz", "PAT_000-T1w.nii.gz"):
+        img = nib.load(results(project) / "PAT_000" / name).slicer[1:5, :, :]
+        to_lia = nib.orientations.ornt_transform(
+            nib.io_orientation(img.affine), nib.orientations.axcodes2ornt("LIA"),
+        )  # fmt: skip
+        files.append(folder / name)
+        nib.save(img.as_reoriented(to_lia), files[-1])
+    return files[0], files[1]
+
+
+def test_plots_use_a_plotting_subject_named_in_the_settings(
+    project: Path,
+    raw_data: tuple[Path, Path],
+) -> None:
+    with_reference(project, raw_data)
+    segmentation, background = plotting_subject(project)
+    env = {
+        "REFERENCE_SUBJECT": "", "REFERENCE_SEGMENTATION": str(segmentation),
+        "REFERENCE_BACKGROUND": str(background), "SLICES": "1 2 3",
+    }  # fmt: skip
+    result = run_stage(project, "04_plot_decomp.sh", "REF", "3", env=env)
+    assert result.returncode == 0, result.stderr
+    (line,) = plot_lines(project)
+    assert f" --segmentation {segmentation} " in line
+    assert f" --background {background} " in line
+    assert " --slices 1 2 3 " in line  # as given
+    parses_with_gmri(line)
+
+
+def test_a_plotting_segmentation_alone_draws_on_its_mask(
+    project: Path,
+    raw_data: tuple[Path, Path],
+) -> None:
+    with_reference(project, raw_data)
+    segmentation, _ = plotting_subject(project)
+    env = {"REFERENCE_SUBJECT": "", "REFERENCE_SEGMENTATION": str(segmentation)}
+    result = run_stage(project, "04_plot_decomp.sh", "REF", "3", env=env)
+    assert result.returncode == 0, result.stderr
+    (line,) = plot_lines(project)
+    assert f" --segmentation {segmentation} " in line and " --background " not in line
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"REFERENCE_SEGMENTATION": "/no/seg.nii.gz"}, "/no/seg.nii.gz"),
+    ],
+)
+def test_plot_settings_are_checked_before_submitting(
+    project: Path,
+    raw_data: tuple[Path, Path],
+    env: dict[str, str],
+    message: str,
+) -> None:
+    with_reference(project, raw_data)
+    result = run_stage(project, "04_plot_decomp.sh", "REF", "3", env=env)
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert plot_lines(project) == []
+
+
+def test_subject_stats_need_the_volumes_of_01(project: Path) -> None:
+    with_data(project)
+    subject_info_frame().to_csv(results(project) / "subject_info.csv", index=False)
+    result = run_stage(project, "05_subject_stats.sh", "all", "3")
+    assert result.returncode == 1
+    assert (
+        "Not columns of" in result.stderr
+        and "ventricles_volume_fraction" in result.stderr
+    )
+    assert not any(" sbatch " in line for line in logged(project))

@@ -45,11 +45,11 @@ variable that varies is used where a group variable is needed (`code/tensor4gmri
 | Script | What it does | Requires |
 |---|---|---|
 | `00_find_files.sh` | Writes `subject_info.csv`, the study's subjects: those of the labels not marked `exclude` and diagnosed REF or iNPH (Group 0 or 1), labels named, `Stratum` added; the others are listed as left out. For these subjects only, finds the scans closest to 2, 4, 8 and 24 h after the first, merges the SAS (labels + 10000) and parenchyma segmentations and copies the baseline (pre-injection) T1w into `<subject>/`, then writes `files_to_process.csv` and `manifest.csv`. Prints the subjects without scans and the number found per Group and Sex. Runs here, not as a job. | raw data, labels |
-| `01_preprocessing.sh` | `gmri preprocess --input-type T1w`: `preprocess/data/roi_signal.parquet` (median and mean per label and scan). Then a job writes the table that 02–04 read, `roi_signal_min<N>voxels.parquet` (and `.csv`), cleaned in three steps: every subject's ROI with fewer than `MIN_VOXELS` voxels (default 100) is removed, then every row with NaN values, then, for every subject, each label some subject has no row of left. Every removed row is listed with its reason (`small`, `nan`, `incomplete`) in `removed_rois_min<N>voxels.csv`, the labels removed for everyone with the subjects without them in `removed_labels_min<N>voxels.csv`. `PREPROCESS=no` only redoes this cleaning, e.g. after changing `MIN_VOXELS`. | 00 |
+| `01_preprocessing.sh` | `gmri preprocess --input-type T1w`: `preprocess/data/roi_signal.parquet` (median and mean per label and scan). Then a job writes the table that 02–04 read, `roi_signal_min<N>voxels.parquet` (and `.csv`), cleaned in three steps: every subject's ROI with fewer than `MIN_VOXELS` voxels (default 100) is removed, then every row with NaN values, then, for every subject, each label some subject has no row of left. Every removed row is listed with its reason (`small`, `nan`, `incomplete`) in `removed_rois_min<N>voxels.csv`, the labels removed for everyone with the subjects without them in `removed_labels_min<N>voxels.csv`. A second job writes each subject's brain volumes to `volumes.csv` and adds them to `subject_info.csv` for 05: ventricles, SAS (CSF without the ventricles), parenchyma and cortical grey matter (gMRI's `roi_groups`), in mL (voxel count × voxel volume of each label in the uncleaned `roi_signal.parquet`) and as a fraction of all labelled volume; it prints their medians per Group. `PREPROCESS=no` only redoes these two jobs, e.g. after changing `MIN_VOXELS`. | 00 |
 | `02_decompose.sh "<groups>" ["<ranks>"]` | CP fit of each group and rank with random restarts: the best restart and the restarts' reproducibility, in `decompose/cp/rank_<r>_<group>/`. Starts 04 for each fit once it is collected (`PLOT=no`: not). | 00, 01 |
 | `03_replicability.sh "<groups>" ["<ranks>"]` | Half-half replicability: fits of random halves of each group's subjects, the factor match score per split and rank, and its plot against rank. | 00, 01 |
 | `04_plot_decomp.sh "<groups>" ["<ranks>"]` | `gmri plot decomposition`: mode grid, subject mode, time mode, spatial maps on `REFERENCE_SUBJECT`, outliers, and the subject and time coefficients as csv. | 02 |
-| `05_subject_stats.sh "<groups>" ["<ranks>"]` | `gmri stats`: covariate-adjusted tests of the subject coefficients (primary variables, and Height and Weight adjusted for them), then their figures and a LaTeX table of the variables per group (`code/plot_stats`). See gMRI's `docs/subject-statistics.md`. | 02 |
+| `05_subject_stats.sh "<groups>" ["<ranks>"]` | `gmri stats`: covariate-adjusted tests of the subject coefficients (primary variables, and Height, Weight and the brain volumes of 01 adjusted for them), then their figures and a LaTeX table of the variables per group (`code/plot_stats`). See gMRI's `docs/subject-statistics.md`. With `COMPONENT_CORRELATIONS=yes` (default, rank ≥ 2) also a job of its own for the correlations between components: per pair, the partial r adjusted for the primary variables with 95% CI, permutation p and FDR over the pairs (gmri's own test, `gMRItensor.subject_statistics.clinical_effects`), and the unadjusted r, in `__subject_stats_components.csv`, drawn as a lower-triangle heatmap. | 02 |
 
 `<groups>` and `<ranks>` are quoted, space-separated lists; every group and rank is its own fit.
 Without `<ranks>`, `RANKS` of `settings.sh` (`2 3 4 5 6`) is used.
@@ -62,10 +62,12 @@ Without `<ranks>`, `RANKS` of `settings.sh` (`2 3 4 5 6`) is used.
 - **Shared.** `settings.sh`: `RANKS`, `MIN_VOXELS`, the spatial maps (`REFERENCE_SUBJECT`,
   `REFERENCE_BACKGROUND`, `SLICES`), the SLURM array settings (`TASKS_PER_JOB`, `ARRAY_LIMIT`,
   `MAX_ARRAY_SIZE`) and local runs (`LOCAL_PROCS`, `RUN_LOCALLY`).
-- **Spatial maps.** Drawn on `REFERENCE_SUBJECT`'s merged segmentation (default
-  `$SUB_REF_MEDIAN`), over `REFERENCE_BACKGROUND` (default that subject's T1w from 00), at
-  `SLICES` (`"I J K"`, voxel indices of the background reoriented to RAS; the mode grid shows `I`;
-  empty: centre of mass).
+- **Spatial maps.** Drawn on `REFERENCE_SEGMENTATION` over `REFERENCE_BACKGROUND` at `SLICES`.
+  `.env` may name the two images, e.g. a cropped plotting subject (`code/adapt_example_subject.py`);
+  otherwise they are `REFERENCE_SUBJECT`'s (default `$SUB_REF_MEDIAN`) segmentation and T1w from
+  00. A segmentation without a background is drawn on its own mask. `SLICES` (`"I J K"`) is gmri's
+  `--slices`: voxel indices of the background reoriented to RAS (nibabel's
+  `as_closest_canonical`; the mode grid shows I). Empty: the centre of mass.
 - **Cleaning (01).** `MIN_VOXELS` (default 100) is the smallest ROI, in voxels of a subject's own
   segmentation, that is used. 01 removes the rows of smaller ones (every time point), then the
   rows with NaN values (that scan only), then every label that some subject then has no row of,
@@ -86,8 +88,10 @@ Without `<ranks>`, `RANKS` of `settings.sh` (`2 3 4 5 6`) is used.
   (`RESTART_PROCS`, `N_PROCS`) are lowered to it, and every library gets that many threads. Each
   parallel fit process takes about 1 GB of memory. Example:
   `RUN_LOCALLY=yes LOCAL_PROCS=8 bash code/pipeline/02_decompose.sh "REF iNPH" "3 4"`.
-- **Resuming.** Rerun the same command: 02 refits everything (`OVERWRITE=yes`); 03 reuses the
-  stored restarts with the same settings (`OVERWRITE=no`) and refits the rest.
+- **Resuming.** Rerun the same command: 02 and 03 refit everything (`OVERWRITE=yes`); with
+  `OVERWRITE=no` they reuse the stored restarts fitted with the same settings and fit the rest.
+- **Rerunning 00** rewrites `subject_info.csv` without the brain volumes; rerun 01
+  (`PREPROCESS=no` is enough) before 05, which otherwise stops with "Not columns of …".
 - **Record of what ran.** Every command is printed and appended to
   `$RESULTS_DIR/commands.log`, with the time and code version; each gmri command also writes
   its settings as json next to its outputs. SLURM logs go to `slurm/<job name>_<job id>.out`.
@@ -96,7 +100,7 @@ Without `<ranks>`, `RANKS` of `settings.sh` (`2 3 4 5 6`) is used.
 
 ```
 $RESULTS_DIR/                              ($BASE_DATA_FOLDER/tensor)
-  files_to_process.csv  subject_info.csv  manifest.csv  commands.log
+  files_to_process.csv  subject_info.csv  manifest.csv  volumes.csv (01)  commands.log
   <subject>/                               <subject>-segmentation.nii.gz, -brainmask.nii.gz, -T1w.nii.gz
   preprocess/data/                         roi_signal.parquet, roi_signal.csv, preprocess.json,
                                            roi_signal_min<N>voxels.{parquet,csv},
@@ -105,7 +109,8 @@ $RESULTS_DIR/                              ($BASE_DATA_FOLDER/tensor)
                                            fits.csv, plan.json, restarts/cp_rank_<r>/ (reproducibility.csv/.png)
   replicability/<group>/                   replicability.csv, plan.json, excluded_subjects.csv, restarts/
   plots/decomposition/cp/rank_<r>_<group>/ figures/decomposition/cp_rank_<r>__*.{pdf,png,csv} (04),
-                                           statistics/cp_rank_<r>__subject_stats_*.{csv,pdf,png,tex} (05)
+                                           statistics/cp_rank_<r>__subject_stats_*.{csv,pdf,png,tex} (05,
+                                           incl. __subject_stats_components.{csv,pdf,png})
   plots/replicability/<group>/             fms_by_rank.{pdf,png}, fms_summary.csv
 ```
 

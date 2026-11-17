@@ -1,5 +1,8 @@
 """Figures of one model's `gmri stats` results, next to its tables in `<stats-dir>/statistics/`:
 
+- `<model>__subject_stats_components`: with `<model>__subject_stats_components.csv`
+  (component_correlations.py), the correlations between components, adjusted for the primary
+  variables, as a lower-triangle heatmap with their 95% CIs and p_perm
 - `<model>__subject_stats_groups`: the coefficients by each primary variable, as they are (no
   tests; one fit over every subject with its R² for a numerical one), fitted to a page
 - `<model>__subject_stats_primary`: standardised effects of the primary variables per
@@ -59,6 +62,7 @@ from plot_stats.figures import (
     MAX_H,
     PAD,
     plot_added_variables,
+    plot_component_correlations,
     plot_effects,
     plot_interaction_added_variables,
     plot_interaction_effects,
@@ -211,6 +215,11 @@ def main(argv: list[str] | None = None) -> list[Path]:
             units,
             names,
         )
+    components = statistics / f"{stem}__subject_stats_components.csv"
+    if components.is_file():  # code/plot_stats/component_correlations.py
+        figure = plot_component_correlations(pd.read_csv(components))
+        if figure is not None:
+            written += save_page_figure(figure, f"{out}_components")
     for path in written:
         print(f"Wrote {path}")
     return written
@@ -275,7 +284,6 @@ def clinical_figures(
         written += save_page_figure(
             plot_effects(
                 clinical,
-                show_n=True,
                 columns=CLINICAL_COLUMNS,
                 categories=plain or None,
                 names=names,
@@ -321,7 +329,6 @@ def clinical_figures(
                 blocks,
                 title,
                 categories[title],
-                True,
                 CLINICAL_COLUMNS,
                 names,
             ),

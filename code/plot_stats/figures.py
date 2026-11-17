@@ -89,7 +89,7 @@ PANEL_GAP = 0.22
 PANEL_H_PER_COMPONENT = 0.25
 MIN_H_PER_COMPONENT = 0.15  # as far as panels shrink to fit MAX_H
 PANEL_H_EXTRA = 0.08
-N_TITLE_H = 0.15  # the n= above a panel
+N_TITLE_H = 0.15  # a line of title above a panel
 NO_TITLE_H = 0.04
 FOOT_H = 0.34  # x tick labels and a one-line x label
 X_LABEL_LINE_H = 0.12  # each further line of an x label
@@ -347,6 +347,102 @@ def plot_primary_groups(
     return fig
 
 
+# The figure of the correlations between components (plot_component_correlations), in inches:
+# cells as wide as fit in COMPONENTS_MAX_W, at most COMPONENTS_CELL_W.
+COMPONENTS_MAX_W = 170 / 25.4 - 2 * PAD  # 17 cm as saved
+COMPONENTS_FIXED_W = 1.55  # y tick labels and label, colour bar and its label
+COMPONENTS_CELL_W = 1.3
+COMPONENTS_CELL_H = 0.6
+COMPONENTS_TEXT_W = 1.1  # "-0.31 [-0.49, -0.11]" at COMPONENTS_SIZE
+COMPONENTS_SIZE = 8.0
+
+
+def p_perm_text(p: float) -> str:
+    return r"$p_{perm}<0.001$" if p < 0.001 else rf"$p_{{perm}}={p:.2g}$"
+
+
+def plot_component_correlations(pairs: pd.DataFrame) -> Figure | None:
+    """The correlations between components (`plot_stats.components.component_correlations`) as
+    a staircase of the pairs below the diagonal: rows components 2..R, columns 1..R-1, each cell
+    coloured by the adjusted partial r and showing it with its 95% CI on one line, bold where
+    `p_perm` < FILLED_P, and its `p_perm` below; those cells framed thick, as the key says. At
+    most COMPONENTS_MAX_W wide: cells narrow to fit, and their text shrinks only then. None
+    without pairs."""
+    if pairs.empty:
+        return None
+    rank = int(pairs["component_b"].max())
+    n = rank - 1
+    cell_w = min(COMPONENTS_CELL_W, (COMPONENTS_MAX_W - COMPONENTS_FIXED_W) / n)
+    size = min(COMPONENTS_SIZE, COMPONENTS_SIZE * (cell_w - 0.08) / COMPONENTS_TEXT_W)
+    fig, ax = plt.subplots(
+        figsize=(COMPONENTS_FIXED_W + cell_w * n, COMPONENTS_CELL_H * n + 0.9),
+    )
+    shown = np.full((n, n), np.nan)
+    for row in pairs.itertuples():
+        shown[int(row.component_b) - 2, int(row.component_a) - 1] = row.partial_r
+    image = ax.imshow(
+        np.ma.masked_invalid(shown),
+        cmap="RdBu_r",
+        vmin=-1,
+        vmax=1,
+        aspect="auto",
+    )
+    for row in pairs.itertuples():
+        i, j = int(row.component_b) - 2, int(row.component_a) - 1
+        significant = row.p_perm < FILLED_P
+        color = "white" if abs(row.partial_r) > 0.55 else "black"
+        ax.text(
+            j, i - 0.14,
+            f"{row.partial_r:.2f} [{row.partial_r_ci_low:.2f}, {row.partial_r_ci_high:.2f}]",
+            ha="center", va="center", fontsize=size, color=color,
+            fontweight="bold" if significant else "normal",
+        )  # fmt: skip
+        ax.text(
+            j, i + 0.2, p_perm_text(row.p_perm), ha="center", va="center",
+            fontsize=size - 1.5, color=color,
+        )  # fmt: skip
+        ax.add_patch(
+            Rectangle(
+                (j - 0.5, i - 0.5), 1, 1, fill=False, edgecolor="0.6", linewidth=0.6,
+                zorder=0.5,
+            ),
+        )  # fmt: skip
+        if significant:
+            ax.add_patch(
+                Rectangle(
+                    (j - 0.5, i - 0.5), 1, 1, fill=False, edgecolor="black",
+                    linewidth=1.6,
+                ),
+            )  # fmt: skip
+    ax.set_xticks(range(n), [str(k + 1) for k in range(n)])
+    ax.set_yticks(range(n), [str(k + 2) for k in range(n)])
+    ax.set_xlabel("Component")
+    ax.set_ylabel("Component")
+    ax.tick_params(which="both", top=False, right=False, length=0)
+    ax.minorticks_off()
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    key = Patch(
+        facecolor="none",
+        edgecolor="black",
+        linewidth=1.6,
+        label=r"$p_{perm} < 0.05$",
+    )
+    ax.legend(
+        handles=[key],
+        loc="upper right",
+        frameon=False,
+        fontsize=8,
+        handlelength=1.6,
+        handleheight=1.1,
+    )
+    bar = fig.colorbar(image, ax=ax, fraction=0.05, pad=0.03, shrink=0.9)
+    bar.set_label("Correlation", fontsize=8)
+    bar.ax.tick_params(labelsize=7)
+    fig.tight_layout()
+    return fig
+
+
 def _effects_panel(ax: Axes, rows: pd.DataFrame, rank: int) -> bool:
     """Draw one comparison's rows (one per component); whether any was tested."""
     tested = False
@@ -532,7 +628,7 @@ def _effects_key() -> list[Patch | Line2D]:
         ),
         Line2D(
             [], [], marker="o", linestyle="", markerfacecolor="white",
-            markeredgecolor=OTHER_COLOR, label=rf"$p_{{perm}}\geq{FILLED_P}$ (uncorrected)",
+            markeredgecolor=OTHER_COLOR, label=rf"$p_{{perm}}\geq{FILLED_P}$",
         ),
         Line2D([], [], color=OTHER_COLOR, linewidth=1.3, label="95% CI"),
     ]  # fmt: skip
@@ -567,7 +663,6 @@ class _EffectsBlock(NamedTuple):
 
 def plot_effects(
     table: pd.DataFrame,
-    show_n: bool = False,
     columns: int | None = None,
     categories: dict[str, list[str]] | None = None,
     names: dict[str, str] | None = None,
@@ -576,7 +671,7 @@ def plot_effects(
     """One panel per comparison of a `gmri stats` table: each component's standardised effect
     (`standardised_effects`: the partial correlation of a numerical term, Cohen's d of a
     contrast) and its 95% CI in its colour, filled when its permutation p is below `FILLED_P`;
-    on top, the statistic with `show_statistic` and `n=` subjects with `show_n`. The x label
+    on top, the statistic with `show_statistic`. The x label
     names the term (by `names`, else its column name), or the levels a contrast compares,
     which also name the ends of its x axis; the correlation panels share their x range, as do
     the Cohen's d ones. With `categories` (title -> terms of `table`, each in at most one) one
@@ -594,14 +689,13 @@ def plot_effects(
         )
         for title, terms in _blocks(list(dict.fromkeys(table["term"])), categories)
     ]
-    return _draw_effects(blocks, show_n, columns, names or {}, show_statistic)
+    return _draw_effects(blocks, columns, names or {}, show_statistic)
 
 
 def plot_interaction_effects(
     blocks: Sequence[InteractionBlock],
     title: str,
     terms: Sequence[str],
-    show_n: bool = True,
     columns: int | None = None,
     names: dict[str, str] | None = None,
 ) -> Figure:
@@ -619,7 +713,6 @@ def plot_interaction_effects(
             for block in blocks
             if block.test == "slope"
         ],
-        show_n,
         columns,
         names or {},
     )
@@ -627,7 +720,6 @@ def plot_interaction_effects(
 
 def _draw_effects(
     blocks: Sequence[_EffectsBlock],
-    show_n: bool,
     columns: int | None,
     names: dict[str, str],
     show_statistic: bool = False,
@@ -677,9 +769,8 @@ def _draw_effects(
             kind = next((k for k in rows["effect_kind"] if k), "")
             if _effects_panel(ax, rows.sort_values("component"), rank):
                 shared.setdefault(kind, []).append(ax)
-            heading = [STATISTICS[kind]] if show_statistic and kind else []
-            heading += [f"n={int(rows['n'].iloc[0])}"] if show_n else []
-            ax.set_title(", ".join(heading), fontsize=7, pad=3)
+            if show_statistic and kind:
+                ax.set_title(STATISTICS[kind], fontsize=7, pad=3)
             ax.xaxis.set_major_locator(MaxNLocator(4))
             ax.tick_params(axis="x", labelsize=6)
         if block_axes:
@@ -707,7 +798,7 @@ def _draw_effects(
     def lines(items: list) -> list[list]:
         return [items[i : i + columns] for i in range(0, len(items), columns)]
 
-    head_h = N_TITLE_H if show_n or show_statistic else NO_TITLE_H
+    head_h = N_TITLE_H if show_statistic else NO_TITLE_H
 
     def foot_h(labels_: list[str], pairs: list[tuple[str, str]]) -> float:
         extra_lines = max(label.count("\n") for label in labels_)
@@ -891,7 +982,7 @@ def _correlation_key(block: _CorrelationBlock) -> list[Patch | Line2D]:
     handles: list[Patch | Line2D] = [
         Patch(
             facecolor="white", edgecolor="black", linewidth=1.6,
-            label=rf"$p_{{perm}}<{FILLED_P}$ (uncorrected)",
+            label=rf"$p_{{perm}}<{FILLED_P}$",
         ),
     ]  # fmt: skip
     if not set(block.terms) <= set(block.table["term"]):
@@ -920,13 +1011,7 @@ def _draw_partial_r(
         blocks = [blocks[0]._replace(title="")]
     rank = max(int(block.table["component"].max()) for block in blocks)
     components = list(range(1, rank + 1))
-    # A term without rows (no slope in the group of an interaction block) has the block's n.
-    row_labels = []
-    for block in blocks:
-        n = block.table.drop_duplicates("term").set_index("term")["n"]
-        row_labels.append(
-            [f"{names.get(t, t)} (n={int(n.get(t, n.iloc[0]))})" for t in block.terms],
-        )
+    row_labels = [[names.get(t, t) for t in block.terms] for block in blocks]
     # Every heatmap starts after the widest row labels of its slot of the line.
     label_w = (
         _text_width([label for labels_ in row_labels for label in labels_], 7)
@@ -1022,8 +1107,7 @@ def plot_added_variables(
     for term in terms:
         rows = residuals[residuals["term"] == term]
         if not rows.empty:
-            stats = table[table["term"] == term]
-            columns.append((f"n={int(stats['n'].iloc[0])}", term, rows, stats))
+            columns.append(("", term, rows, table[table["term"] == term]))
     return _draw_added_variables(columns, units or {}, names or {}, False)
 
 
@@ -1048,10 +1132,7 @@ def plot_interaction_added_variables(
         stats = table[
             (table["term"].str.split(" × ").str[0] == term) & (table["level"] == level)
         ]
-        n = int(
-            rows.loc[rows["component"] == rows["component"].min(), "in_group"].sum(),
-        )
-        columns.append((f"{group} (n={n})", term, rows, stats))
+        columns.append((group, term, rows, stats))
     return _draw_added_variables(columns, units or {}, names or {}, True)
 
 
@@ -1098,8 +1179,9 @@ def _draw_added_variables(
     others: bool,
 ) -> Figure | None:
     """A column per `(title, term, residuals, table rows)` of `columns`, a row per component,
-    each column `PAGE_W` / `COLUMNS` wide (to `PAGE_W` at most); the rows share their y range
-    and the columns their x range, and the panels are as tall as fit in `MAX_H`."""
+    each column `PAGE_W` / `COLUMNS` wide (to `PAGE_W` at most), titled where a title is given;
+    the rows share their y range and the columns their x range, and the panels are as tall as
+    fit in `MAX_H`."""
     if not columns:
         return None
     rank = max(int(rows["component"].max()) for _, _, rows, _ in columns)
@@ -1114,7 +1196,8 @@ def _draw_added_variables(
         for _, term, _, _ in columns
     ]  # fmt: skip
     foot = FOOT_H + X_LABEL_LINE_H * max(label.count("\n") for label in x_labels)
-    fixed = 2 * EDGE + N_TITLE_H + rank * (N_TITLE_H + AV_ROW_GAP) + foot
+    head = N_TITLE_H if any(title for title, _, _, _ in columns) else 0.0
+    fixed = 2 * EDGE + head + rank * (N_TITLE_H + AV_ROW_GAP) + foot
     panel_h = max(min(AV_PANEL_H, (MAX_H - fixed) / rank), MIN_AV_PANEL_H)
     fig = plt.figure(figsize=(width, fixed + rank * panel_h))
     _frame(fig)
@@ -1131,9 +1214,7 @@ def _draw_added_variables(
         )
     grid: list[list[Axes]] = []
     for k in range(1, rank + 1):
-        top = (
-            EDGE + N_TITLE_H + (k - 1) * (N_TITLE_H + panel_h + AV_ROW_GAP) + N_TITLE_H
-        )
+        top = EDGE + head + (k - 1) * (N_TITLE_H + panel_h + AV_ROW_GAP) + N_TITLE_H
         row_axes = []
         for c, (_, _, rows, stats) in enumerate(columns):
             ax = fig.add_axes((0, 0, 1, 1))

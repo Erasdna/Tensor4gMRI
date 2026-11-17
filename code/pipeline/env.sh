@@ -323,22 +323,29 @@ group_columns() {
     run_tool python code/preprocessing/group_subjects.py --group "$1" --print "$2"
 }
 
-# Set REFERENCE_SEGMENTATION and REFERENCE_BACKGROUND (default: the T1w of REFERENCE_SUBJECT),
-# the merged segmentation and image the spatial maps are drawn on; exit unless both exist.
+# Set REFERENCE_SEGMENTATION and REFERENCE_BACKGROUND (settings.sh), the merged segmentation and
+# image the spatial maps are drawn on: as named, else REFERENCE_SUBJECT's from 00_find_files.sh.
+# Exit unless they exist (no REFERENCE_BACKGROUND with only REFERENCE_SEGMENTATION named).
 require_reference() {
-    if [ -z "$REFERENCE_SUBJECT" ]; then
-        echo "Set REFERENCE_SUBJECT (settings.sh, default \$SUB_REF_MEDIAN of .env): the subject" \
-            "whose segmentation the spatial maps are drawn on" >&2
-        exit 1
+    if [ -z "$REFERENCE_SEGMENTATION" ]; then
+        if [ -z "$REFERENCE_SUBJECT" ]; then
+            echo "Set REFERENCE_SEGMENTATION, or REFERENCE_SUBJECT (settings.sh, default" \
+                "\$SUB_REF_MEDIAN of .env): what the spatial maps are drawn on" >&2
+            exit 1
+        fi
+        REFERENCE_SEGMENTATION="$RESULTS_DIR/$REFERENCE_SUBJECT/$REFERENCE_SUBJECT-segmentation.nii.gz"
+        REFERENCE_BACKGROUND=${REFERENCE_BACKGROUND:-"$RESULTS_DIR/$REFERENCE_SUBJECT/$REFERENCE_SUBJECT-T1w.nii.gz"}
+        if [ ! -f "$REFERENCE_SEGMENTATION" ]; then
+            echo "No $REFERENCE_SEGMENTATION: is REFERENCE_SUBJECT=$REFERENCE_SUBJECT among the" \
+                "subjects of code/pipeline/00_find_files.sh?" >&2
+            exit 1
+        fi
     fi
-    REFERENCE_SEGMENTATION="$RESULTS_DIR/$REFERENCE_SUBJECT/$REFERENCE_SUBJECT-segmentation.nii.gz"
     if [ ! -f "$REFERENCE_SEGMENTATION" ]; then
-        echo "No $REFERENCE_SEGMENTATION: is REFERENCE_SUBJECT=$REFERENCE_SUBJECT among the" \
-            "subjects of code/pipeline/00_find_files.sh?" >&2
+        echo "No REFERENCE_SEGMENTATION $REFERENCE_SEGMENTATION" >&2
         exit 1
     fi
-    REFERENCE_BACKGROUND=${REFERENCE_BACKGROUND:-"$RESULTS_DIR/$REFERENCE_SUBJECT/$REFERENCE_SUBJECT-T1w.nii.gz"}
-    if [ ! -f "$REFERENCE_BACKGROUND" ]; then
+    if [ -n "$REFERENCE_BACKGROUND" ] && [ ! -f "$REFERENCE_BACKGROUND" ]; then
         echo "No REFERENCE_BACKGROUND $REFERENCE_BACKGROUND" >&2
         exit 1
     fi

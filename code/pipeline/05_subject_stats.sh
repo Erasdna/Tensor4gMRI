@@ -33,7 +33,13 @@ PRIMARY_NUMERICAL=${PRIMARY_NUMERICAL-"Age[years,Age]"}   # --primary-numerical
 # Clinical variables (column names only): each is tested in its own model, adjusted for all
 # primary ones, in one clinical table. Empty: the primary table only.
 CLINICAL_CATEGORICAL=${CLINICAL_CATEGORICAL:-}            # --clinical-categorical
-CLINICAL_NUMERICAL=${CLINICAL_NUMERICAL-"Height Weight"}  # --clinical-numerical
+# The brain volumes come from 01_preprocessing.sh (code/preprocessing/subject_volumes.py).
+CLINICAL_NUMERICAL=${CLINICAL_NUMERICAL-"
+    Height Weight
+    ventricles_volume_fraction sas_volume_fraction parenchyma_volume_fraction
+    cortical_grey_matter_volume_fraction
+    ventricles_volume_ml sas_volume_ml parenchyma_volume_ml cortical_grey_matter_volume_ml
+"}  # --clinical-numerical
 # Interactions, 'clinical:primary' pairs of a CLINICAL_NUMERICAL and a PRIMARY_CATEGORICAL
 # variable: the clinical variable's slope within each group of the primary one, and the slopes'
 # differences (gMRI docs/subject-statistics.md, section 5). Empty: none.
@@ -51,11 +57,19 @@ ALPHA=${ALPHA:-0.05}                     # --alpha: FDR level of the significant
 # be unnamed (statistics/). Set as an environment variable, CLINICAL_CATEGORIES is one set.
 if [ -z "${CLINICAL_CATEGORIES+set}" ]; then
 CLINICAL_CATEGORIES=(
-    'Anthropometrics=Height[cm],Weight[kg]'
+    'Anthropometrics=Height[cm],Weight[kg];
+    Volume (as a fraction of total intracranial volume)=ventricles_volume_fraction[,Ventricles],sas_volume_fraction[,SAS],
+        parenchyma_volume_fraction[,Parenchyma],cortical_grey_matter_volume_fraction[,Cortical GM];
+    Volume (mL)=ventricles_volume_ml[mL,Ventricles],sas_volume_ml[mL,SAS],
+        parenchyma_volume_ml[mL,Parenchyma],cortical_grey_matter_volume_ml[mL,Cortical GM]'
 )
 fi
 MARKER_VARIABLE=${MARKER_VARIABLE-Sex}  # subject_info.csv column of the dot shapes ("": one)
 PLOTS_ONLY=${PLOTS_ONLY:-no}            # yes: only redraw the figures from existing tables
+# yes: also the correlations between the components' coefficients, adjusted for the primary
+# variables with the same test (code/plot_stats/component_correlations.py, a job of its own;
+# __subject_stats_components.csv and a heatmap of them); not for rank 1
+COMPONENT_CORRELATIONS=${COMPONENT_CORRELATIONS:-yes}
 
 # --- SLURM options (sbatch) of the jobs this stage submits ----------------------
 SMALL_JOB=(--partition=normal --cpus-per-task=1 --mem-per-cpu=4G --time=02:00:00)
@@ -64,6 +78,7 @@ PLOT_JOB=(--partition=normal --cpus-per-task=1 --mem-per-cpu=4G --time=00:30:00)
 require_each group "${1:-}" "${SUBJECT_GROUPS[@]}"
 require_ranks "$RANKS"
 require_each PLOTS_ONLY "$PLOTS_ONLY" yes no
+require_each COMPONENT_CORRELATIONS "$COMPONENT_CORRELATIONS" yes no
 require_data
 
 # Print the parts of <text> between any of the characters of <separators> outside
@@ -271,15 +286,16 @@ for group in $1; do
     check_variables "${GROUP_PRIMARY[$group]}"
 done
 
-# subject_stats <group>: per rank, gmri stats and then its figures.
+# subject_stats <group>: per rank, gmri stats and the component correlations, then the figures.
 subject_stats() {
-    local group=$1 rank model output after=${DEPENDENCY:-} DEPENDENCY names=()
+    local group=$1 rank model output after=${DEPENDENCY:-} DEPENDENCY names=() waits
     local primary=${GROUP_PRIMARY[$1]}
     mapfile -t names < <(variable_names "$primary")  # the first is the group variable
     for rank in $RANKS; do
         DEPENDENCY=$after
         model="$(model_dir "$group" "$rank")/cp_rank_$rank"
         output="$RESULTS_DIR/plots/decomposition/cp/rank_${rank}_$group"
+        waits=()
         if [ "$PLOTS_ONLY" = "no" ]; then
             local cmd=(gmri stats --model "$model" --subject-info "$SUBJECT_INFO"
                 --output-dir "$output")
@@ -290,8 +306,19 @@ subject_stats() {
             add_optional cmd --interaction "$CLINICAL_INTERACTIONS"
             cmd+=(--n-permutations "$N_PERMUTATIONS" --seed "$SEED" --alpha "$ALPHA")
             run_or_submit "$(job_name subject_stats "$group" "$rank")" "${cmd[@]}"
-            if [ -n "$JOB_ID" ]; then DEPENDENCY="afterany:$JOB_ID"; fi
+            if [ -n "$JOB_ID" ]; then waits+=("$JOB_ID"); fi
+            if [ "$COMPONENT_CORRELATIONS" = "yes" ] && [ "$rank" -gt 1 ]; then
+                local components=(python code/plot_stats/component_correlations.py
+                    --model "$model" --subject-info "$SUBJECT_INFO" --output-dir "$output")
+                add_optional components --primary-categorical "$(variable_names "$primary")"
+                add_optional components --primary-numerical "$(variable_names "$PRIMARY_NUMERICAL")"
+                components+=(--n-permutations "$N_PERMUTATIONS" --seed "$SEED" --alpha "$ALPHA")
+                run_or_submit "$(job_name component_stats "$group" "$rank")" "${components[@]}"
+                if [ -n "$JOB_ID" ]; then waits+=("$JOB_ID"); fi
+            fi
         fi
+        # The figures wait for every table of this rank.
+        if [ ${#waits[@]} -gt 0 ]; then DEPENDENCY="$(IFS=:; echo "afterany:${waits[*]}")"; fi
         run_or_submit "$(job_name plot_subject_stats "$group" "$rank")" --sbatch PLOT_JOB \
             python code/plot_stats/plot_subject_stats.py --model "$model" \
             --subject-info "$SUBJECT_INFO" --stats-dir "$output" \

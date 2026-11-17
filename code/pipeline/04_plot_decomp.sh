@@ -1,8 +1,8 @@
 #!/bin/bash -l
 # Figures of each group's fitted rank (gmri plot decomposition) in
 # plots/decomposition/cp/rank_<r>_<group>/figures/decomposition/: the mode grid, subject mode
-# (by the group variable and against NUMERICAL), time mode, spatial maps (REFERENCE_SUBJECT's
-# segmentation over REFERENCE_BACKGROUND at SLICES, settings.sh) and outliers (leverage against
+# (by the group variable and against NUMERICAL), time mode, spatial maps (REFERENCE_SEGMENTATION
+# over REFERENCE_BACKGROUND at SLICES, settings.sh) and outliers (leverage against
 # residual), plus the subject and time coefficients as csv. The group variable is the first variable that varies within the
 # group (Group for all, M and F; Sex for REF and iNPH), the others are box-plotted too.
 # 02_decompose.sh starts it for each fit (PLOT=yes); run it on its own to redraw.
@@ -40,12 +40,13 @@ for group in $1; do
         cmd=(gmri plot decomposition --model "$(model_dir "$group" "$rank")/cp_rank_$rank"
             --subject-info "$SUBJECT_INFO" --group-variable "$group_variable"
             --output-dir "$RESULTS_DIR/plots/decomposition/cp/rank_${rank}_$group"
-            --segmentation "$REFERENCE_SEGMENTATION" --background "$REFERENCE_BACKGROUND"
+            --segmentation "$REFERENCE_SEGMENTATION"
             --alpha "$ALPHA" --outlier-alpha "$OUTLIER_ALPHA" --page-width "$PAGE_WIDTH"
             --formats $FORMATS --dpi "$DPI")
         add_optional cmd --min-panel-width "$MIN_PANEL_WIDTH"
         add_optional cmd --categorical "$categorical"
         add_optional cmd --numerical "$NUMERICAL"
+        add_optional cmd --background "$REFERENCE_BACKGROUND"
         add_optional cmd --slices "$SLICES"  # settings.sh
         run_or_submit "$(job_name plot_decomposition "$group" "$rank")" --sbatch PLOT_JOB "${cmd[@]}"
     done

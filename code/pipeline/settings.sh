@@ -12,13 +12,16 @@ RANKS=${RANKS:-"2 3 4 5 6"}          # default ranks of 02-05 (each also takes t
 # label some subject has no row of left: 01 writes the cleaned table that 02-04 read
 # (roi_signal_min<MIN_VOXELS>voxels.parquet). 0: no ROI is too small.
 MIN_VOXELS=${MIN_VOXELS:-100}
-# Spatial maps of 04_plot_decomp.sh: drawn on the merged segmentation (00_find_files.sh) of
-# REFERENCE_SUBJECT, default $SUB_REF_MEDIAN of .env, over REFERENCE_BACKGROUND, an image on the
-# same grid (empty: that subject's pre-injection T1w, <subject>/<subject>-T1w.nii.gz from
-# 00_find_files.sh), at SLICES, voxel indices I J K of the background reoriented to RAS (the mode
-# grid shows I, sagittal; empty: centre of mass).
+# Spatial maps of 04_plot_decomp.sh: drawn on REFERENCE_SEGMENTATION (a merged segmentation, CSF
+# labels + 10000) over REFERENCE_BACKGROUND (an image on its grid) at SLICES. .env may name them,
+# e.g. a cropped plotting subject (code/adapt_example_subject.py); empty: the segmentation and
+# pre-injection T1w of REFERENCE_SUBJECT (default $SUB_REF_MEDIAN of .env) from 00_find_files.sh.
+# A REFERENCE_SEGMENTATION without a REFERENCE_BACKGROUND is drawn on its own mask.
 REFERENCE_SUBJECT=${REFERENCE_SUBJECT-${SUB_REF_MEDIAN:-}}
+REFERENCE_SEGMENTATION=${REFERENCE_SEGMENTATION:-}
 REFERENCE_BACKGROUND=${REFERENCE_BACKGROUND:-}
+# "I J K": gmri's --slices, voxel indices of the background reoriented to RAS (nibabel's
+# as_closest_canonical; the mode grid shows I, sagittal). Empty: the centre of mass.
 SLICES=${SLICES:-}
 
 # --- SLURM (the sbatch options of each job are at the top of its stage) ------------
