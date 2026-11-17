@@ -34,7 +34,7 @@ MAX_ITER=${MAX_ITER:-5000}         # --max-iter
 TOLERANCE=${TOLERANCE:-1e-7}       # --tolerance
 DISTRIBUTE=${DISTRIBUTE:-auto}     # yes: plan/arrays/collect; no: one process; auto: yes if
                                    # jobs are submitted
-OVERWRITE=${OVERWRITE:-no}         # yes: plan --overwrite, refit every restart
+OVERWRITE=${OVERWRITE:-yes}         # yes: plan --overwrite, refit every restart
 
 # --- SLURM options (sbatch) of the jobs this stage submits ----------------------
 SMALL_JOB=(--partition=normal --cpus-per-task=1 --mem-per-cpu=4G --time=00:30:00)   # plan, collect, plot
