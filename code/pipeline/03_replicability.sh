@@ -7,6 +7,8 @@
 # task, settings.sh), collect, plot; DISTRIBUTE=no: one process, N_PROCS fits in parallel.
 # Rerun to resume (DISTRIBUTE=yes): restarts stored with the same settings are reused, those
 # fitted with other settings are refitted and overwritten; OVERWRITE=yes refits all.
+# COLLECT_ONLY=yes: only collect and plot the restarts already stored, e.g. after a collect job
+# ran out of time.
 # Writes replicability/<group>/replicability.csv and plots/replicability/<group>/
 # (fms_by_rank.{pdf,png}, fms_summary.csv).
 # Requires: 00_find_files.sh (subject_info.csv), 01_preprocessing.sh (roi_signal.parquet).
@@ -35,6 +37,7 @@ TOLERANCE=${TOLERANCE:-1e-7}       # --tolerance
 DISTRIBUTE=${DISTRIBUTE:-auto}     # yes: plan/arrays/collect; no: one process; auto: yes if
                                    # jobs are submitted
 OVERWRITE=${OVERWRITE:-no}         # yes: plan --overwrite, refit every restart
+COLLECT_ONLY=${COLLECT_ONLY:-no}   # yes: only collect (and plot) the stored restarts of a plan
 
 # --- SLURM options (sbatch) of the jobs this stage submits ----------------------
 SMALL_JOB=(--partition=normal --cpus-per-task=1 --mem-per-cpu=4G --time=02:00:00)   # plan, collect, plot
@@ -45,7 +48,17 @@ require_each group "${1:-}" "${SUBJECT_GROUPS[@]}"
 require_ranks "$RANKS"
 require_each DISTRIBUTE "$DISTRIBUTE" auto yes no
 require_each OVERWRITE "$OVERWRITE" yes no
+require_each COLLECT_ONLY "$COLLECT_ONLY" yes no
 require_data
+if [ "$COLLECT_ONLY" = "yes" ]; then
+    for group in $1; do
+        if [ ! -f "$RESULTS_DIR/replicability/$group/plan.json" ]; then
+            echo "COLLECT_ONLY=yes: no $RESULTS_DIR/replicability/$group/plan.json;" \
+                "run 03_replicability.sh without it first" >&2
+            exit 1
+        fi
+    done
+fi
 if [ "$DISTRIBUTE" = "auto" ]; then
     DISTRIBUTE=no
     if submits; then DISTRIBUTE=yes; fi
@@ -65,7 +78,11 @@ replicability() {
     local input=(--input "$(signal_table)" --engine halfhalf --repeats "$REPEATS" --seed "$SEED"
         --n-procs "$N_PROCS" --subject-info "$SUBJECT_INFO" --stratify-by "$stratify"
         --ranks "${ranks[@]}" "${FIT_FLAGS[@]}")
-    if [ "$DISTRIBUTE" = "no" ]; then
+    if [ "$COLLECT_ONLY" = "yes" ]; then
+        done_id=$(submit "$(job_name replicability_collect "$group")" "${SMALL_JOB[@]}" -- \
+            gmri replicability collect --output-dir "$out")
+        echo "replicability $group: collect $done_id"
+    elif [ "$DISTRIBUTE" = "no" ]; then
         done_id=$(submit "$(job_name replicability "$group")" "${SINGLE_JOB[@]}" -- \
             gmri replicability run --output-dir "$out" "${input[@]}")
         echo "replicability $group: single process $done_id"

@@ -18,7 +18,8 @@
   variable `Group` (`gmri stats --interaction`), and `..._added_variable_<level>` their
   added-variable plots per level; spaces in `Title` and `level` as "_"
 - `..._p_fdr.csv` next to `..._primary`, `..._clinical` and `..._interaction_<Title>`: per
-  variable (and group of a slope) and component its partial correlation with 95% CI, `p_perm`,
+  variable (and group of a slope) and component its partial correlation with 95% CI (numerical)
+  or Cohen's d with 95% CI (categorical; `d`, `d_ci_low`, `d_ci_high`), as plotted, `p_perm`,
   and `p_fdr` from Benjamini-Hochberg within its category (the primary variables one) over all
   components; the figures show the uncorrected `p_perm`
 
@@ -31,6 +32,12 @@ clinical ones in one block per category of `--categories`. The effects and corre
 take 45 mm per column of panels and 90 mm per column of blocks (180 mm for a full line) and,
 where they fit, at most 170 mm in height. Each `--categories` is a set of the
 clinical figures and table; a named one (`name:Title=...`) goes in `statistics/<name>/`.
+
+After the files it wrote, it prints every test of the `_p_fdr.csv` sheets with p_perm < 0.05
+(the filled dots of the figures): category (`name: Title` of a named set), variable (and group
+of a slope), component, effect with 95% CI, p_perm and p_fdr; then, from
+`<model>__subject_stats_components.csv`, every pair of components with p_perm < 0.05: its
+partial r with 95% CI, p_perm and p_fdr (over the pairs).
 """
 
 import argparse
@@ -40,14 +47,17 @@ from pathlib import Path
 import pandas as pd
 from gMRItensor.plotting.utils import save_figure
 from matplotlib.figure import Figure
+from plot_stats.components import correlation_lines
 from plot_stats.data import (
     added_variables,
+    association_lines,
     check_categories,
     check_interaction_categories,
     family_fdr,
     fdr_sheet,
     interaction_blocks,
     model_stem,
+    one_row_per_test,
     parse_categories,
     parse_figure_set,
     parse_variable,
@@ -59,6 +69,7 @@ from plot_stats.data import (
     variable_texts,
 )
 from plot_stats.figures import (
+    FILLED_P,
     MAX_H,
     PAD,
     plot_added_variables,
@@ -186,10 +197,9 @@ def main(argv: list[str] | None = None) -> list[Path]:
         plot_effects(primary, names=names, show_statistic=True),
         f"{out}_primary",
     )
-    written += write_fdr(
-        Path(f"{out}_primary_p_fdr.csv"),
-        fdr_sheet(family_fdr(primary, {"Primary variables": primary_terms})),
-    )
+    primary_rows = family_fdr(primary, {"Primary variables": primary_terms})
+    written += write_fdr(Path(f"{out}_primary_p_fdr.csv"), fdr_sheet(primary_rows))
+    tests = [one_row_per_test(primary_rows)]
     for name, (categories, clinical_variables, groups) in parsed.items():
         units, names = variable_texts(primary_variables + clinical_variables)
         set_out = (statistics / name if name else statistics) / f"{stem}__subject_stats"
@@ -202,7 +212,7 @@ def main(argv: list[str] | None = None) -> list[Path]:
             names,
             f"tab:{stem}{f'_{name}' if name else ''}_clinical",
         )
-        written += clinical_figures(
+        figures, set_tests = clinical_figures(
             set_out,
             clinical,
             read_interactions(args.stats_dir, stem) if groups else None,
@@ -215,13 +225,24 @@ def main(argv: list[str] | None = None) -> list[Path]:
             units,
             names,
         )
+        written += figures
+        tests += [
+            part.assign(category=f"{name}: " + part["category"]) if name else part
+            for part in set_tests
+        ]
     components = statistics / f"{stem}__subject_stats_components.csv"
+    pairs = None
     if components.is_file():  # code/plot_stats/component_correlations.py
-        figure = plot_component_correlations(pd.read_csv(components))
+        pairs = pd.read_csv(components)
+        figure = plot_component_correlations(pairs)
         if figure is not None:
             written += save_page_figure(figure, f"{out}_components")
     for path in written:
         print(f"Wrote {path}")
+    lines = association_lines(pd.concat(tests, ignore_index=True), FILLED_P, stem)
+    if pairs is not None and len(pairs):
+        lines += correlation_lines(pairs, FILLED_P, stem)
+    print("\n".join(lines))
     return written
 
 
@@ -272,13 +293,14 @@ def clinical_figures(
     primary_terms: list[str],
     units: dict[str, str],
     names: dict[str, str],
-) -> list[Path]:
+) -> tuple[list[Path], list[pd.DataFrame]]:
     """The clinical figures of one set of `categories`, as files from `out`, and those of its
     categories with a group (`groups`) from the `interactions` table, each effects figure with
     its `fdr_sheet` (one family per category); the added-variable plots from the subject
     `frame` (`subject_frame`), whose `categorical` primary variables are dummy-coded. The
-    written files."""
+    written files, and the tests of the sheets (`one_row_per_test`)."""
     written: list[Path] = []
+    tests: list[pd.DataFrame] = []
     plain = {title: terms for title, terms in categories.items() if title not in groups}
     if clinical is not None and (plain or not categories):
         written += save_page_figure(
@@ -293,10 +315,9 @@ def clinical_figures(
         families = plain or {
             "Clinical variables": list(dict.fromkeys(clinical["term"])),
         }
-        written += write_fdr(
-            Path(f"{out}_clinical_p_fdr.csv"),
-            fdr_sheet(family_fdr(clinical, families)),
-        )
+        rows = family_fdr(clinical, families)
+        written += write_fdr(Path(f"{out}_clinical_p_fdr.csv"), fdr_sheet(rows))
+        tests.append(one_row_per_test(rows))
         partial_r = plot_partial_r(
             clinical,
             numerical_terms,
@@ -317,7 +338,7 @@ def clinical_figures(
                 stem = f"{out}_added_variable{f'_{_slug(title)}' if title else ''}"
                 written += save_page_figure(figure, stem)
     if interactions is None:
-        return written
+        return written, tests
     for title, group in groups.items():
         blocks = interaction_blocks(interactions, categories[title], group)
         if not blocks:
@@ -341,6 +362,7 @@ def clinical_figures(
             keys=("component", "term", "level"),
         )
         written += write_fdr(Path(f"{figure}_p_fdr.csv"), fdr_sheet(slopes, group=True))
+        tests.append(one_row_per_test(slopes, group=True))
         partial_r = plot_interaction_partial_r(
             blocks,
             title,
@@ -372,7 +394,7 @@ def clinical_figures(
                     added,
                     f"{figure}_added_variable_{_slug(block.level)}",
                 )
-    return written
+    return written, tests
 
 
 if __name__ == "__main__":

@@ -19,8 +19,19 @@ VARIABLE_KINDS = (
     "clinical_categorical",
     "clinical_numerical",
 )
-# The columns per component of an `fdr_sheet`
-FDR_COLUMNS = ("partial_r", "partial_r_ci_low", "partial_r_ci_high", "p_perm", "p_fdr")
+# The columns per component of an `fdr_sheet`: the partial r of a numerical term or Cohen's d of
+# a categorical one (`standardised_effects`, as plotted), each with its 95% CI; slopes have no d
+FDR_COLUMNS = (
+    "partial_r",
+    "partial_r_ci_low",
+    "partial_r_ci_high",
+    "d",
+    "d_ci_low",
+    "d_ci_high",
+    "p_perm",
+    "p_fdr",
+)
+D_COLUMNS = ("d", "d_ci_low", "d_ci_high")
 
 
 def _require(path: Path) -> Path:
@@ -326,27 +337,82 @@ def family_fdr(
     return pd.concat(parts, ignore_index=True)
 
 
-def fdr_sheet(rows: pd.DataFrame, group: bool = False) -> pd.DataFrame:
-    """One row per category and term of `family_fdr` rows, with per component k its
-    `c<k>_<column>` of `FDR_COLUMNS`; a factor's contrasts, which share their p-values, as one
-    row. With `group`, the rows are interaction slopes ("X × Group", level "slope in <g>"):
-    one row per variable X and group g."""
-    rows = rows.assign(variable=rows["term"])
-    index = ["category", "variable"]
+def one_row_per_test(rows: pd.DataFrame, group: bool = False) -> pd.DataFrame:
+    """`family_fdr` rows, one per test: per category, `variable`, `group` and component, a
+    factor's contrasts (which share their p-values) by the first. Each with its plotted effect
+    (`standardised_effects`: `effect`, `effect_low`, `effect_high` of `effect_kind` "r" or "d"),
+    a categorical term's also as `d`, `d_ci_low` and `d_ci_high`. With `group`, the rows are
+    interaction slopes ("X × Group", level "slope in <g>"): `variable` X and `group` g;
+    otherwise `variable` is the term and `group` empty."""
+    rows = standardised_effects(rows)
+    d = rows["effect_kind"] == "d"
+    rows = rows.assign(
+        variable=rows["term"],
+        group="",
+        d=rows["effect"].where(d),
+        d_ci_low=rows["effect_low"].where(d),
+        d_ci_high=rows["effect_high"].where(d),
+    )
     if group:
         rows = rows.assign(
             variable=rows["term"].str.rsplit(" × ", n=1).str[0],
             group=rows["level"].str.removeprefix("slope in "),
         )
-        index.append("group")
-    first = rows.drop_duplicates([*index, "component"])
+    return rows.drop_duplicates(["category", "variable", "group", "component"])
+
+
+def fdr_sheet(rows: pd.DataFrame, group: bool = False) -> pd.DataFrame:
+    """One row per category and term of `family_fdr` rows (`one_row_per_test`), with per
+    component k its `c<k>_<column>` of `FDR_COLUMNS`: `d`, `d_ci_low` and `d_ci_high` are a
+    categorical term's plotted Cohen's d and its CI, empty for a numerical one; a factor's
+    contrasts are one row, with the first contrast's d. With `group`, the rows are interaction
+    slopes: one row per variable X and group g, without the d columns."""
+    first = one_row_per_test(rows, group)
+    index = ["category", "variable", *(["group"] if group else [])]
+    columns = [c for c in FDR_COLUMNS if not (group and c in D_COLUMNS)]
     components = sorted(first["component"].unique())
-    order = [(column, k) for k in components for column in FDR_COLUMNS]
-    wide = first.pivot(index=index, columns="component", values=list(FDR_COLUMNS))
+    order = [(column, k) for k in components for column in columns]
+    wide = first.pivot(index=index, columns="component", values=columns)
     wide = wide.reindex(pd.MultiIndex.from_frame(first[index].drop_duplicates()))
     wide = wide.reindex(columns=order)
     wide.columns = [f"c{k}_{column}" for column, k in order]
     return wide.reset_index()
+
+
+def associations(tests: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    """The rows of `tests` (`one_row_per_test`) with `p_perm` below `threshold`, in their order
+    but with each variable's (and slope group's) components together, component 1 first.
+    """
+    hits = tests[tests["p_perm"] < threshold]
+    block = hits.groupby(["category", "variable", "group"], sort=False).ngroup()
+    return (
+        hits.assign(block=block.to_numpy())
+        .sort_values(["block", "component"], kind="stable")
+        .drop(columns="block")
+    )
+
+
+def association_lines(tests: pd.DataFrame, threshold: float, title: str) -> list[str]:
+    """The lines to print of the `associations` of `tests` below `threshold`: `title` with
+    their number of all tests (those with a `p_perm`), then one each with its category,
+    variable (and slope group), component, effect (r or d) with 95% CI, p_perm and p_fdr.
+    """
+    hits = associations(tests, threshold)
+    tested = int(tests["p_perm"].notna().sum())
+    lines = [f"{title}: {len(hits)} of {tested} tests with p_perm < {threshold:g}"]
+    labels = [
+        f"{variable} ({group})" if group else variable
+        for variable, group in zip(hits["variable"], hits["group"])
+    ]
+    width = max(map(len, hits["category"]), default=0)
+    label_width = max(map(len, labels), default=0)
+    for row, label in zip(hits.itertuples(), labels):
+        lines.append(
+            f"  {row.category:<{width}}  {label:<{label_width}}  c{row.component}  "
+            f"{row.effect_kind} = {row.effect:5.2f} [{row.effect_low:5.2f}, "
+            f"{row.effect_high:5.2f}]  p_perm = {row.p_perm:.4f}  p_fdr = {row.p_fdr:.4f}",
+        )
+    return lines
 
 
 def _residuals(values: np.ndarray, design: np.ndarray) -> np.ndarray:

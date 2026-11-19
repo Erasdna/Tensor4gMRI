@@ -703,6 +703,14 @@ def plot_lines(project: Path) -> list[str]:
     ]
 
 
+def table_lines(project: Path) -> list[str]:
+    return [
+        f"{line} "
+        for line in logged(project)
+        if " code/analysis/component_table.py " in line
+    ]
+
+
 def test_plot_decomposition_of_each_group(
     project: Path,
     raw_data: tuple[Path, Path],
@@ -727,6 +735,12 @@ def test_plot_decomposition_of_each_group(
         parses_with_gmri(line)
     assert " --group-variable Group " in all_plot and " --categorical Sex " in all_plot
     assert " --group-variable Sex " in ref_plot and " --categorical " not in ref_plot
+    all_table, ref_table = table_lines(project)
+    for group, line in (("all", all_table), ("REF", ref_table)):
+        figures = f"{out}/plots/decomposition/cp/rank_3_{group}/figures/decomposition"
+        assert f"--job-name=component_table_rank3_{group} " in line
+        assert f" --model {out}/decompose/cp/rank_3_{group}/cp_rank_3 " in line
+        assert f" --output {figures}/cp_rank_3__components.tex " in line
 
 
 def test_plot_decomposition_options(project: Path, raw_data: tuple[Path, Path]) -> None:
@@ -749,6 +763,9 @@ def test_plot_decomposition_options(project: Path, raw_data: tuple[Path, Path]) 
         assert " --formats png " in line
         assert " --group-variable Group " in line
         parses_with_gmri(line)
+    tables = table_lines(project)
+    assert len(tables) == 2
+    assert all(" --dependency=afterany:7 " in line for line in tables)
 
 
 @pytest.mark.parametrize(
@@ -801,6 +818,7 @@ def test_decompose_plots_each_fit_once_collected(
             "decompose_fit",
             "decompose_collect",
             "plot_decomposition",
+            "component_table",
         )
     ]
     sbatch = [line for line in logged(project) if " sbatch " in line]
@@ -840,6 +858,9 @@ def test_decompose_and_plots_run_here(
         assert (figures / f"cp_rank_2__{part}.png").is_file(), part
     coefficients = pd.read_csv(figures / "cp_rank_2__subject_coefficients.csv")
     assert sorted(coefficients["subject"]) == subject_ids()
+    table = (figures / "cp_rank_2__components.tex").read_text().splitlines()
+    assert table[0] == r"\begin{tabular}{clcc}" and table[-1] == r"\end{tabular}"
+    assert [line.split(" & ")[0] for line in table[4:6]] == ["1", "2"]
 
 
 def replicability_lines(project: Path, command: str) -> list[str]:
@@ -869,7 +890,7 @@ def test_replicability_of_each_group(project: Path) -> None:
         )
         assert " --restarts 100 --max-iter 5000 --tolerance 1e-7 " in line
         assert " --splits " not in line and " --restart-procs " not in line
-        assert " --overwrite " in line  # OVERWRITE=yes by default
+        assert " --overwrite " not in line  # OVERWRITE=no by default
         parses_with_gmri(line)
     assert (
         " --stratify-by Stratum " in all_plan and " --exclude-subjects " not in all_plan
@@ -921,6 +942,49 @@ def test_replicability_arrays_per_rank_then_collect_and_plot(project: Path) -> N
         f"python code/analysis/plot_replicability.py {out}/replicability/M/replicability.csv "
         f"{out}/plots/replicability/M",
     )
+
+
+def with_plan(project: Path, group: str) -> Path:
+    """A `gmri replicability plan` output of `group` (03's collect reads only the store)."""
+    out = results(project) / "replicability" / group
+    out.mkdir(parents=True)
+    (out / "plan.json").write_text("{}")
+    return out
+
+
+def test_replicability_collect_only(project: Path) -> None:
+    with_data(project)
+    out = with_plan(project, "M")
+    result = run_stage(
+        project,
+        "03_replicability.sh",
+        "M",
+        "2 3",
+        env={"COLLECT_ONLY": "yes"},
+    )
+    assert result.returncode == 0, result.stderr
+    sbatch = [f"{line} " for line in logged(project) if " sbatch " in line]
+    names = [line.split("--job-name=")[1].split()[0] for line in sbatch]
+    assert names == ["replicability_collect_M", "replicability_plot_M"]
+    collect, plot = sbatch
+    assert " --dependency" not in collect
+    assert f" gmri replicability collect --output-dir {out} " in collect
+    assert " --dependency=afterany:1 " in plot
+    parses_with_gmri(collect)
+
+
+def test_replicability_collect_only_needs_a_plan(project: Path) -> None:
+    with_data(project)
+    with_plan(project, "M")
+    result = run_stage(
+        project,
+        "03_replicability.sh",
+        "M REF",
+        env={"COLLECT_ONLY": "yes"},
+    )
+    assert result.returncode == 1
+    assert f"{results(project)}/replicability/REF/plan.json" in result.stderr
+    assert logged(project) == []
 
 
 def test_replicability_in_one_process(project: Path) -> None:
@@ -987,6 +1051,22 @@ def test_replicability_runs_here(project: Path, distribute: str) -> None:
     plots = results(project) / "plots/replicability/all"
     assert (plots / "fms_by_rank.png").is_file()
     assert pd.read_csv(plots / "fms_summary.csv")["rank"].tolist() == [1, 2]
+    if distribute == "yes":
+        # Collect again from the stored restarts, without planning or fitting.
+        table = results(project) / "replicability/all/replicability.csv"
+        table.unlink()
+        result = run_stage(
+            project,
+            "03_replicability.sh",
+            "all",
+            "1 2",
+            env={**env, "COLLECT_ONLY": "yes"},
+            sbatch=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert pd.read_csv(table)["fms"].tolist() == fms["fms"].tolist()
+        assert len(replicability_lines(project, "plan")) == 1
+        assert len(replicability_lines(project, "collect")) == 2
 
 
 def stats_lines(project: Path) -> list[str]:
@@ -1167,6 +1247,16 @@ def test_subject_stats_runs_here(project: Path) -> None:
         sbatch=False,
     )
     assert result.returncode == 0, result.stderr
+    assert re.search(
+        r"^cp_rank_2: \d+ of \d+ tests with p_perm < 0.05$",
+        result.stdout,
+        re.M,
+    )
+    assert re.search(
+        r"^cp_rank_2: [01] of 1 component pairs with p_perm < 0.05$",
+        result.stdout,
+        re.M,
+    )
 
     statistics = results(project) / "plots/decomposition/cp/rank_2_all/statistics"
     primary = pd.read_csv(statistics / "cp_rank_2__subject_stats_primary.csv")

@@ -73,3 +73,22 @@ def component_correlations(
     )
     pairs["n"] = pairs["n"].astype(np.int64)
     return pairs.loc[:, PAIR_COLUMNS]
+
+
+def correlation_lines(pairs: pd.DataFrame, threshold: float, title: str) -> list[str]:
+    """The lines to print of the pairs of `pairs` (`component_correlations`) with `p_perm` below
+    `threshold`: `title` with their number of all tested pairs, then one each with the pair, its
+    partial r with 95% CI, p_perm and p_fdr."""
+    hits = pairs[pairs["p_perm"] < threshold]
+    tested = int(pairs["p_perm"].notna().sum())
+    lines = [
+        f"{title}: {len(hits)} of {tested} component pairs with p_perm < {threshold:g}",
+    ]
+    labels = [f"c{a} × c{b}" for a, b in zip(hits["component_a"], hits["component_b"])]
+    width = max(map(len, labels), default=0)
+    for row, label in zip(hits.itertuples(), labels):
+        lines.append(
+            f"  {label:<{width}}  r = {row.partial_r:5.2f} [{row.partial_r_ci_low:5.2f}, "
+            f"{row.partial_r_ci_high:5.2f}]  p_perm = {row.p_perm:.4f}  p_fdr = {row.p_fdr:.4f}",
+        )
+    return lines

@@ -3,7 +3,10 @@
 # plots/decomposition/cp/rank_<r>_<group>/figures/decomposition/: the mode grid, subject mode
 # (by the group variable and against NUMERICAL), time mode, spatial maps (REFERENCE_SEGMENTATION
 # over REFERENCE_BACKGROUND at SLICES, settings.sh) and outliers (leverage against
-# residual), plus the subject and time coefficients as csv. The group variable is the first variable that varies within the
+# residual), plus the subject and time coefficients as csv; and cp_rank_<r>__components.tex, the
+# LaTeX table of each component's weight and share of the data's sum of squares, their sum and
+# the model fit (code/analysis/component_table.py, read from model.h5; no caption, names blank).
+# The group variable is the first variable that varies within the
 # group (Group for all, M and F; Sex for REF and iNPH), the others are box-plotted too.
 # 02_decompose.sh starts it for each fit (PLOT=yes); run it on its own to redraw.
 # Requires: 02_decompose.sh (decompose/cp/rank_<r>_<group>/cp_rank_<r>/model.h5),
@@ -27,6 +30,7 @@ DPI=${DPI:-400}                            # --dpi
 
 # --- SLURM options (sbatch) -----------------------------------------------------
 PLOT_JOB=(--partition=normal --cpus-per-task=1 --mem-per-cpu=8G --time=00:30:00)
+TABLE_JOB=(--partition=normal --cpus-per-task=1 --mem-per-cpu=1G --time=00:05:00)
 
 require_each group "${1:-}" "${SUBJECT_GROUPS[@]}"
 require_ranks "$RANKS"
@@ -49,5 +53,9 @@ for group in $1; do
         add_optional cmd --background "$REFERENCE_BACKGROUND"
         add_optional cmd --slices "$SLICES"  # settings.sh
         run_or_submit "$(job_name plot_decomposition "$group" "$rank")" --sbatch PLOT_JOB "${cmd[@]}"
+        run_or_submit "$(job_name component_table "$group" "$rank")" --sbatch TABLE_JOB \
+            python code/analysis/component_table.py \
+            --model "$(model_dir "$group" "$rank")/cp_rank_$rank" \
+            --output "$RESULTS_DIR/plots/decomposition/cp/rank_${rank}_$group/figures/decomposition/cp_rank_${rank}__components.tex"
     done
 done

@@ -1,5 +1,6 @@
 """Correlations between components' subject coefficients (code/plot_stats/components.py, its CLI
-code/plot_stats/component_correlations.py, and plot_stats.figures.plot_component_correlations)."""
+code/plot_stats/component_correlations.py, plot_stats.figures.plot_component_correlations, and
+the pairs with p_perm < 0.05 05's plot job prints)."""
 
 import os
 import subprocess
@@ -11,7 +12,11 @@ import pandas as pd
 import pytest
 from matplotlib.patches import Rectangle
 from matplotlib.text import Text
-from plot_stats.components import PAIR_COLUMNS, component_correlations
+from plot_stats.components import (
+    PAIR_COLUMNS,
+    component_correlations,
+    correlation_lines,
+)
 from plot_stats.figures import PAD, plot_component_correlations
 
 REPO = Path(__file__).resolve().parents[1]
@@ -95,6 +100,37 @@ def test_only_the_coupled_pair_is_significant(pairs: pd.DataFrame) -> None:
     )
     assert (pairs["p_fdr"] >= pairs["p_perm"] - 1e-12).all()
     assert pairs["significant"].tolist() == [True, False, False]
+
+
+def test_the_pairs_below_the_threshold_are_printed(pairs: pd.DataFrame) -> None:
+    below = pairs[pairs["p_perm"] < 0.05]
+    lines = correlation_lines(pairs, 0.05, "cp_rank_3")
+    assert (
+        lines[0] == f"cp_rank_3: {len(below)} of 3 component pairs with p_perm < 0.05"
+    )
+    assert len(lines) == 1 + len(below)
+    coupled = below.iloc[0]
+    assert (coupled["component_a"], coupled["component_b"]) == (1, 2)
+    assert lines[1].startswith(f"  c1 × c2  r = {coupled['partial_r']:5.2f} [")
+
+
+def test_the_printed_pairs() -> None:
+    pairs = pd.DataFrame(
+        {
+            "component_a": [1, 1, 2],
+            "component_b": [2, 3, 3],
+            "partial_r": [0.312, -0.05, -0.241],
+            "partial_r_ci_low": [0.11, -0.25, -0.43],
+            "partial_r_ci_high": [0.48, 0.16, -0.03],
+            "p_perm": [0.003, 0.6, 0.021],
+            "p_fdr": [0.009, 0.6, 0.0315],
+        },
+    )
+    assert correlation_lines(pairs, 0.05, "cp_rank_3") == [
+        "cp_rank_3: 2 of 3 component pairs with p_perm < 0.05",
+        "  c1 × c2  r =  0.31 [ 0.11,  0.48]  p_perm = 0.0030  p_fdr = 0.0090",
+        "  c2 × c3  r = -0.24 [-0.43, -0.03]  p_perm = 0.0210  p_fdr = 0.0315",
+    ]
 
 
 def test_one_component_has_no_pairs() -> None:
